@@ -199,11 +199,6 @@ module internal AutoFacing =
         =
         let placingFacility = placingDef.GetCompProperties<CompProperties_Facility>()
 
-        let placingAffected =
-            placingDef.GetCompProperties<CompProperties_AffectedByFacilities>()
-
-        let targetFacility = targetDef.GetCompProperties<CompProperties_Facility>()
-
         let targetAffected =
             targetDef.GetCompProperties<CompProperties_AffectedByFacilities>()
 
@@ -236,27 +231,6 @@ module internal AutoFacing =
 
             applyRelation mask
 
-        if
-            not (isNull placingAffected)
-            && not (isNull targetFacility)
-            && containsDef placingAffected.linkableFacilities targetDef
-        then
-            let vanillaMask =
-                validRotationsMask (fun rotation ->
-                    CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
-                        targetDef,
-                        target.Position,
-                        target.Rotation,
-                        placingDef,
-                        placingPos,
-                        rotation,
-                        map
-                    ))
-
-            let mask = preferTargetRotation vanillaMask targetDef target.Rotation
-
-            applyRelation mask
-
         if hasConstraint then Some allowed else None
 
     let private radiusForFacilityProps (props: CompProperties_Facility) =
@@ -272,30 +246,12 @@ module internal AutoFacing =
             max 2 (int (Math.Ceiling(float props.maxDistance)) + 2)
 
     let private facilitySearchRadius (placingDef: ThingDef) =
-        let mutable radius = 0
-
-        let addFacility (facilityDef: ThingDef) =
-            if not (isNull facilityDef) then
-                let props = facilityDef.GetCompProperties<CompProperties_Facility>()
-
-                if not (isNull props) then
-                    radius <- max radius (radiusForFacilityProps props)
-
         let facility = placingDef.GetCompProperties<CompProperties_Facility>()
 
-        if not (isNull facility) then
-            radius <- max radius (radiusForFacilityProps facility)
-
-        let affected = placingDef.GetCompProperties<CompProperties_AffectedByFacilities>()
-
-        if not (isNull affected) && not (isNull affected.linkableFacilities) then
-            for index = 0 to affected.linkableFacilities.Count - 1 do
-                addFacility affected.linkableFacilities.[index]
-
-        if radius = 0 then
+        if isNull facility then
             0
         else
-            radius + max placingDef.size.x placingDef.size.z
+            radiusForFacilityProps facility + max placingDef.size.x placingDef.size.z
 
     let private chairCandidateOffsets =
         lazy
