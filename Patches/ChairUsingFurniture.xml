@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Patch>
-  <Operation Class="PatchOperationAddModExtension">
-    <xpath>/Defs/ThingDef[surfaceType="Eat"]</xpath>
-    <value>
-      <li Class="AutoFacingChairs.ChairFacingSurfaceExtension" />
-    </value>
-  </Operation>
-</Patch>

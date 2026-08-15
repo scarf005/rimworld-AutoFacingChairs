@@ -1,3 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LanguageData>
+  <AutoFacingChairs_SettingsCategory>가구 방향 자동 조정</AutoFacingChairs_SettingsCategory>
+  <AutoFacingChairs_ChairsOnly>의자만</AutoFacingChairs_ChairsOnly>
+  <AutoFacingChairs_ChairsOnlyDesc>앉을 수 있는 가구만 자동으로 회전합니다.</AutoFacingChairs_ChairsOnlyDesc>
 </LanguageData>

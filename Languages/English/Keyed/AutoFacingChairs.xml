@@ -1,3 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LanguageData>
+  <AutoFacingChairs_SettingsCategory>Auto-Facing Chairs</AutoFacingChairs_SettingsCategory>
+  <AutoFacingChairs_ChairsOnly>Chairs only</AutoFacingChairs_ChairsOnly>
+  <AutoFacingChairs_ChairsOnlyDesc>Only automatically rotate sittable furniture.</AutoFacingChairs_ChairsOnlyDesc>
 </LanguageData>
