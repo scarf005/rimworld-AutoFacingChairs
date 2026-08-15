@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Auto-Facing Chairs</name>
+  <author>scarf</author>
+  <packageId>scarf.chairsnap</packageId>
+  <supportedVersions>
+    <li>1.6</li>
+  </supportedVersions>
+  <modDependencies>
+    <li>
+      <packageId>brrainz.harmony</packageId>
+      <displayName>Harmony</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+      <downloadUrl>https://github.com/pardeike/HarmonyRimWorld/releases/latest</downloadUrl>
+    </li>
+    <li>
+      <packageId>latta.fsharp.core</packageId>
+      <displayName>FSharp.Core</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2059725183</steamWorkshopUrl>
+    </li>
+  </modDependencies>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+    <li>latta.fsharp.core</li>
+  </loadAfter>
+  <description>Automatically rotates chairs to match furniture chair interaction spots while placing them. Manual Q/E rotation still works after the automatic facing is applied.</description>
+</ModMetaData>

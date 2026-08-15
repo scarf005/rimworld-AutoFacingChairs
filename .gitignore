@@ -1,0 +1,6 @@
+*.dll
+*.pdb
+Source/**/bin/
+Source/**/obj/
+.idea/
+.vscode/
