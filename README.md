@@ -1,5 +1,8 @@
 # Auto-Facing Chairs
 
+> [!CAUTION]
+> Obviously vibecoded
+
 RimWorld 1.6 quality-of-life mod.
 
 When you place a sittable chair at a chair-using furniture position, the chair automatically rotates to face the furniture.

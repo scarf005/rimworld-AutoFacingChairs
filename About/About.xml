@@ -2,7 +2,8 @@
 <ModMetaData>
   <name>Auto-Facing Chairs</name>
   <author>scarf</author>
-  <packageId>scarf.chairsnap</packageId>
+  <packageId>scarf.autofacingchairs</packageId>
+  <modVersion>1.0.0</modVersion>
   <supportedVersions>
     <li>1.6</li>
   </supportedVersions>
@@ -23,5 +24,8 @@
     <li>brrainz.harmony</li>
     <li>latta.fsharp.core</li>
   </loadAfter>
-  <description>Automatically rotates chairs to match furniture chair interaction spots while placing them. Manual Q/E rotation still works after the automatic facing is applied.</description>
+  <description>Makes your chair automatically face furniture when installing so you don't have to spam q/e
+
+warning: entirely vibecoded
+source code: https://github.com/scarf005/rimworld-AutoFacingChairs</description>
 </ModMetaData>
