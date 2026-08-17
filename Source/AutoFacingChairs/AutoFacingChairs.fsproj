@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="AutoFacingLogic.fs" />
     <Compile Include="AutoFacingChairs.fs" />
   </ItemGroup>
 

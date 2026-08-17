@@ -9,7 +9,7 @@ When you place a sittable chair at a chair-using furniture position, the chair a
 
 - Uses the target furniture's actual interaction-cell definition and `interactionCellIconReverse` value.
 - Supports dining tables and other `surfaceType=Eat` furniture by facing chairs toward the occupied footprint.
-- `Patches/ChairUsingFurniture.xml` tags all XML defs that declare an eating surface; XML inheritance carries the tag to vanilla and modded child defs.
+- Supports poker tables, chess tables, and modded furniture whose `JoyGiverDef` uses `JoyGiver_InteractBuildingSitAdjacent` with `requireChair=true`.
 - Works with built furniture, blueprints, and construction frames.
 - Only snaps when the mouse enters a new map cell, so Q/E remains available for manual rotation afterwards.
 - If overlapping interaction cells demand conflicting rotations, the mod leaves the current rotation unchanged.
@@ -29,6 +29,14 @@ just build
 
 The project targets .NET Framework 4.7.2. It pins `FSharp.Core` 4.7.2 for ABI compatibility but excludes the runtime assembly from the mod output; the shared FSharp.Core RimWorld mod supplies it at runtime.
 
+## Tests
+
+```sh
+just test
+```
+
+The unit tests cover adjacent-seat joy-giver detection and the four cardinal chair-facing cases.
+
 ## Formatting
 
 ```sh
@@ -41,6 +49,7 @@ Fantomas is pinned as a repository-local .NET tool in `.config/dotnet-tools.json
 
 ```sh
 just fmt
+just test
 just build
 just install
 just enable

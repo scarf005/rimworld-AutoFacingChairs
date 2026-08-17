@@ -62,10 +62,14 @@ type internal PlacementState() =
     let mutable hasLastCell = false
     let mutable lastCell = Unchecked.defaultof<IntVec3>
     let mutable lastMap: Map = null
+    let seen = HashSet<Thing>()
+
+    member _.Seen = seen
 
     member _.Reset() =
         hasLastCell <- false
         lastMap <- null
+        seen.Clear()
 
     member _.IsSame(map: Map, cell: IntVec3) =
         hasLastCell && obj.ReferenceEquals(lastMap, map) && lastCell = cell
@@ -107,7 +111,37 @@ module internal AutoFacing =
         | :? ThingDef as def -> def
         | _ -> thing.def
 
-    let private containsDef (defs: List<ThingDef>) (def: ThingDef) = not (isNull defs) && defs.Contains(def)
+    let private adjacentSeatTargets =
+        lazy
+            let targets = HashSet<ThingDef>()
+            let joyGivers = DefDatabase<JoyGiverDef>.AllDefsListForReading
+            let baseType = typeof<JoyGiver_InteractBuildingSitAdjacent>
+
+            for index = 0 to joyGivers.Count - 1 do
+                let joyGiver = joyGivers.[index]
+
+                if
+                    AutoFacingLogic.isAdjacentSeatJoyGiver baseType joyGiver.requireChair joyGiver.giverClass
+                    && not (isNull joyGiver.thingDefs)
+                then
+                    for thingIndex = 0 to joyGiver.thingDefs.Count - 1 do
+                        let def = joyGiver.thingDefs.[thingIndex]
+
+                        if not (isNull def) then
+                            targets.Add(def) |> ignore
+
+            targets
+
+    type private PlacementProfile =
+        { Facility: CompProperties_Facility
+          FacilityTargets: HashSet<ThingDef>
+          FacilityMapDefs: ThingDef array
+          FacilitySearchKind: FacilitySearchKind
+          FacilityGridRadius: int }
+
+    let private profiles = Dictionary<ThingDef, PlacementProfile>()
+    let private emptyTargetDefs = HashSet<ThingDef>()
+    let private emptyMapDefs: ThingDef array = [||]
 
     let private hasInteractionCellAt (def: ThingDef) (center: IntVec3) (rotation: Rot4) (cell: IntVec3) =
         let offsets = def.multipleInteractionCellOffsets
@@ -118,7 +152,6 @@ module internal AutoFacing =
 
             while not found && index < offsets.Count do
                 found <- ThingUtility.InteractionCell(offsets.[index], center, rotation) = cell
-
                 index <- index + 1
 
             found
@@ -143,36 +176,29 @@ module internal AutoFacing =
         else
             None
 
-    let private tryTableFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
-        if def.surfaceType <> SurfaceType.Eat then
+    let private toRot4 facing =
+        match facing with
+        | CardinalFacing.North -> Rot4.North
+        | CardinalFacing.East -> Rot4.East
+        | CardinalFacing.South -> Rot4.South
+        | CardinalFacing.West -> Rot4.West
+
+    let private tryAdjacentSeatFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
+        let usesAdjacentSeat =
+            def.surfaceType = SurfaceType.Eat || adjacentSeatTargets.Value.Contains(def)
+
+        if not usesAdjacentSeat then
             None
         else
             let rect = GenAdj.OccupiedRect(thing.Position, thing.Rotation, def.size)
 
-            if cell.x = rect.minX - 1 && cell.z >= rect.minZ && cell.z <= rect.maxZ then
-                Some Rot4.East
-            elif cell.x = rect.maxX + 1 && cell.z >= rect.minZ && cell.z <= rect.maxZ then
-                Some Rot4.West
-            elif cell.z = rect.minZ - 1 && cell.x >= rect.minX && cell.x <= rect.maxX then
-                Some Rot4.North
-            elif cell.z = rect.maxZ + 1 && cell.x >= rect.minX && cell.x <= rect.maxX then
-                Some Rot4.South
-            else
-                None
+            AutoFacingLogic.tryAdjacentFacing rect.minX rect.maxX rect.minZ rect.maxZ cell.x cell.z
+            |> Option.map toRot4
 
     let private tryChairFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
         match tryInteractionCellFacing thing def cell with
         | Some facing -> Some facing
-        | None -> tryTableFacing thing def cell
-
-    let private validRotationsMask predicate =
-        let mutable mask = 0
-
-        for rotation in rotations do
-            if predicate rotation then
-                mask <- mask ||| rotationBit rotation
-
-        mask
+        | None -> tryAdjacentSeatFacing thing def cell
 
     let private hasMultipleRotations mask = mask <> 0 && (mask &&& (mask - 1)) <> 0
 
@@ -189,7 +215,6 @@ module internal AutoFacing =
 
                 if (mask &&& opposite) <> 0 then opposite else mask
 
-
     let private tryFacilityConstraintMask
         (map: Map)
         (placingDef: ThingDef)
@@ -197,61 +222,162 @@ module internal AutoFacing =
         (target: Thing)
         (targetDef: ThingDef)
         =
-        let placingFacility = placingDef.GetCompProperties<CompProperties_Facility>()
+        let mutable vanillaMask = 0
 
-        let targetAffected =
-            targetDef.GetCompProperties<CompProperties_AffectedByFacilities>()
+        for rotation in rotations do
+            if
+                CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
+                    placingDef,
+                    placingPos,
+                    rotation,
+                    targetDef,
+                    target.Position,
+                    target.Rotation,
+                    map
+                )
+            then
+                vanillaMask <- vanillaMask ||| rotationBit rotation
 
-        let mutable hasConstraint = false
-        let mutable allowed = allRotationsMask
-
-        let applyRelation mask =
-            if mask <> 0 then
-                hasConstraint <- true
-                allowed <- allowed &&& mask
-
-        if
-            not (isNull placingFacility)
-            && not (isNull targetAffected)
-            && containsDef targetAffected.linkableFacilities placingDef
-        then
-            let vanillaMask =
-                validRotationsMask (fun rotation ->
-                    CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
-                        placingDef,
-                        placingPos,
-                        rotation,
-                        targetDef,
-                        target.Position,
-                        target.Rotation,
-                        map
-                    ))
-
-            let mask = preferTargetRotation vanillaMask targetDef target.Rotation
-
-            applyRelation mask
-
-        if hasConstraint then Some allowed else None
+        if vanillaMask = 0 then
+            None
+        else
+            Some(preferTargetRotation vanillaMask targetDef target.Rotation)
 
     let private radiusForFacilityProps (props: CompProperties_Facility) =
-        if
-            props.mustBePlacedAdjacent
-            || props.mustBePlacedAdjacentCardinalToBedHead
-            || props.mustBePlacedAdjacentCardinalToAndFacingBedHead
-        then
-            2
-        elif props.mustBePlacedFacingThingLinear then
+        if props.mustBePlacedFacingThingLinear then
             max 8 (int (Math.Ceiling(float props.maxDistance)) + 2)
         else
             max 2 (int (Math.Ceiling(float props.maxDistance)) + 2)
 
-    let private facilitySearchRadius (placingDef: ThingDef) =
-        let facility = placingDef.GetCompProperties<CompProperties_Facility>()
+    let private addMapDef (defs: HashSet<ThingDef>) (def: ThingDef) =
+        if not (isNull def) then
+            defs.Add(def) |> ignore
+
+    let private buildProfile (def: ThingDef) =
+        let facility = def.GetCompProperties<CompProperties_Facility>()
 
         if isNull facility then
-            0
+            { Facility = null
+              FacilityTargets = emptyTargetDefs
+              FacilityMapDefs = emptyMapDefs
+              FacilitySearchKind = FacilitySearchKind.BoundedOrListed
+              FacilityGridRadius = 0 }
         else
-            radiusForFacilityProps facility + max placingDef.size.x placingDef.size.z
+            let targets = HashSet<ThingDef>()
+            let mapDefs = HashSet<ThingDef>()
+
+            if not (isNull facility.linkableBuildings) then
+                for index = 0 to facility.linkableBuildings.Count - 1 do
+                    let target = facility.linkableBuildings.[index]
+
+                    if not (isNull target) && targets.Add(target) then
+                        addMapDef mapDefs target
+                        addMapDef mapDefs target.blueprintDef
+                        addMapDef mapDefs target.installBlueprintDef
+                        addMapDef mapDefs target.frameDef
+
+            let searchKind =
+                AutoFacingLogic.facilitySearchKind
+                    facility.mustBePlacedAdjacent
+                    facility.mustBePlacedAdjacentCardinalToBedHead
+                    facility.mustBePlacedAdjacentCardinalToAndFacingBedHead
+
+            let gridRadius =
+                match searchKind with
+                | FacilitySearchKind.BoundedOrListed -> radiusForFacilityProps facility + max def.size.x def.size.z
+                | _ -> 0
+
+            { Facility = facility
+              FacilityTargets = targets
+              FacilityMapDefs = mapDefs |> Seq.toArray
+              FacilitySearchKind = searchKind
+              FacilityGridRadius = gridRadius }
+
+    let private profileFor (def: ThingDef) =
+        let mutable profile = Unchecked.defaultof<PlacementProfile>
+
+        if profiles.TryGetValue(def, &profile) then
+            profile
+        else
+            let profile = buildProfile def
+            profiles.Add(def, profile)
+            profile
+
+    let private addThingsAtCell (map: Map) (seen: HashSet<Thing>) (cell: IntVec3) =
+        if cell.InBounds(map) then
+            let things = map.thingGrid.ThingsListAtFast(cell)
+
+            for index = 0 to things.Count - 1 do
+                seen.Add(things.[index]) |> ignore
+
+    let private addCardinalPerimeter (map: Map) (seen: HashSet<Thing>) (rect: CellRect) =
+        let minX = rect.minX
+        let maxX = rect.maxX
+        let minZ = rect.minZ
+        let maxZ = rect.maxZ
+
+        for x = minX to maxX do
+            addThingsAtCell map seen (IntVec3(x, 0, minZ - 1))
+            addThingsAtCell map seen (IntVec3(x, 0, maxZ + 1))
+
+        for z = minZ to maxZ do
+            addThingsAtCell map seen (IntVec3(minX - 1, 0, z))
+            addThingsAtCell map seen (IntVec3(maxX + 1, 0, z))
+
+    let private addEightWayPerimeter (map: Map) (seen: HashSet<Thing>) (rect: CellRect) =
+        let minX = rect.minX - 1
+        let maxX = rect.maxX + 1
+        let minZ = rect.minZ - 1
+        let maxZ = rect.maxZ + 1
+
+        for x = minX to maxX do
+            addThingsAtCell map seen (IntVec3(x, 0, minZ))
+            addThingsAtCell map seen (IntVec3(x, 0, maxZ))
+
+        for z = minZ + 1 to maxZ - 1 do
+            addThingsAtCell map seen (IntVec3(minX, 0, z))
+            addThingsAtCell map seen (IntVec3(maxX, 0, z))
+
+    let private collectAdjacentFacilityCandidates
+        (map: Map)
+        (placingDef: ThingDef)
+        (placingCell: IntVec3)
+        searchKind
+        (seen: HashSet<Thing>)
+        =
+        seen.Clear()
+
+        let rotationCount =
+            if placingDef.size.x = 1 && placingDef.size.z = 1 then
+                1
+            else
+                rotations.Length
+
+        for rotationIndex = 0 to rotationCount - 1 do
+            let rect =
+                GenAdj.OccupiedRect(placingCell, rotations.[rotationIndex], placingDef.size)
+
+            match searchKind with
+            | FacilitySearchKind.CardinalAdjacent -> addCardinalPerimeter map seen rect
+            | FacilitySearchKind.EightWayAdjacent -> addEightWayPerimeter map seen rect
+            | FacilitySearchKind.BoundedOrListed -> ()
+
+    let private boundedGridRect (map: Map) (placingCell: IntVec3) radius =
+        let minX = max 0 (placingCell.x - radius)
+        let maxX = min (map.Size.x - 1) (placingCell.x + radius)
+        let minZ = max 0 (placingCell.z - radius)
+        let maxZ = min (map.Size.z - 1) (placingCell.z + radius)
+        CellRect(minX, minZ, maxX - minX + 1, maxZ - minZ + 1)
+
+    let private listedTargetCountAtMost (map: Map) (mapDefs: ThingDef array) limit =
+        let mutable count = 0L
+        let mutable index = 0
+
+        while count * 4L <= limit && index < mapDefs.Length do
+            count <- count + int64 (map.listerThings.ThingsOfDef(mapDefs.[index]).Count)
+            index <- index + 1
+
+        count
 
     let private chairCandidateOffsets =
         lazy
@@ -281,30 +407,42 @@ module internal AutoFacing =
 
             offsets |> Seq.toArray
 
-    let private findFacing (map: Map) (placingDef: ThingDef) (placingCell: IntVec3) (currentRotation: Rot4) =
+    let private findFacing
+        (state: PlacementState)
+        (map: Map)
+        (placingDef: ThingDef)
+        (placingCell: IntVec3)
+        (currentRotation: Rot4)
+        =
         let mutable allowed = allRotationsMask
         let mutable hasConstraint = false
-        let seen = HashSet<Thing>()
+        let seen = state.Seen
+        let profile = profileFor placingDef
 
         let applyMask mask =
             hasConstraint <- true
             allowed <- allowed &&& mask
 
-        let processThing (thing: Thing) =
-            if seen.Add(thing) then
-                let targetDef = buildableThingDef thing
+        let processChairThing (thing: Thing) =
+            let targetDef = buildableThingDef thing
 
-                if isSeat placingDef then
-                    match tryChairFacing thing targetDef placingCell with
-                    | Some facing -> applyMask (rotationBit facing)
-                    | None -> ()
+            match tryChairFacing thing targetDef placingCell with
+            | Some facing -> applyMask (rotationBit facing)
+            | None -> ()
 
+        let processFacilityThing (thing: Thing) =
+            let targetDef = buildableThingDef thing
+
+            if profile.FacilityTargets.Contains(targetDef) then
                 match tryFacilityConstraintMask map placingDef placingCell thing targetDef with
                 | Some mask -> applyMask mask
                 | None -> ()
 
-        // Chairs use the sparse interaction/table lookup.
+        // Chair lookup only touches cells that can contain an interaction or
+        // adjacent-seat target. The scratch set is reused between mouse cells.
         if isSeat placingDef then
+            seen.Clear()
+
             let offsets = chairCandidateOffsets.Value
             let mutable offsetIndex = 0
 
@@ -313,45 +451,86 @@ module internal AutoFacing =
 
                 if candidateCell.InBounds(map) then
                     let things = map.thingGrid.ThingsListAtFast(candidateCell)
-
                     let mutable thingIndex = 0
 
                     while allowed <> 0 && thingIndex < things.Count do
-                        processThing things.[thingIndex]
+                        let thing = things.[thingIndex]
+
+                        if seen.Add(thing) then
+                            processChairThing thing
+
                         thingIndex <- thingIndex + 1
 
                 offsetIndex <- offsetIndex + 1
 
-        // Facilities use a bounded ThingGrid search.
-        //
-        // This covers vanilla and modded furniture using
-        // CompFacility / CompAffectedByFacilities without defName
-        // checks or a whole-map Thing scan.
-        let radius = facilitySearchRadius placingDef
+        if
+            allowed <> 0
+            && not (isNull profile.Facility)
+            && profile.FacilityTargets.Count > 0
+        then
+            match profile.FacilitySearchKind with
+            | FacilitySearchKind.CardinalAdjacent
+            | FacilitySearchKind.EightWayAdjacent ->
+                // Adjacent facilities only need the perimeter of their possible
+                // occupied rectangles. This is O(width + height), and 1x1
+                // furniture touches exactly 4 or 8 cells.
+                collectAdjacentFacilityCandidates map placingDef placingCell profile.FacilitySearchKind seen
 
-        if allowed <> 0 && radius > 0 then
-            let minX = max 0 (placingCell.x - radius)
-            let maxX = min (map.Size.x - 1) (placingCell.x + radius)
-            let minZ = max 0 (placingCell.z - radius)
-            let maxZ = min (map.Size.z - 1) (placingCell.z + radius)
+                let mutable enumerator = seen.GetEnumerator()
 
-            let mutable z = minZ
+                while allowed <> 0 && enumerator.MoveNext() do
+                    processFacilityThing enumerator.Current
 
-            while allowed <> 0 && z <= maxZ do
-                let mutable x = minX
+            | FacilitySearchKind.BoundedOrListed ->
+                let rect = boundedGridRect map placingCell profile.FacilityGridRadius
 
-                while allowed <> 0 && x <= maxX do
-                    let things = map.thingGrid.ThingsListAtFast(IntVec3(x, 0, z))
+                let gridCellCount =
+                    int64 (rect.maxX - rect.minX + 1) * int64 (rect.maxZ - rect.minZ + 1)
 
-                    let mutable thingIndex = 0
+                let listedTargetCount =
+                    listedTargetCountAtMost map profile.FacilityMapDefs gridCellCount
 
-                    while allowed <> 0 && thingIndex < things.Count do
-                        processThing things.[thingIndex]
-                        thingIndex <- thingIndex + 1
+                if AutoFacingLogic.preferListedTargetScan listedTargetCount gridCellCount then
+                    // ListerThings is indexed by ThingDef, so sparse target
+                    // types avoid probing hundreds or thousands of empty cells.
+                    let mutable defIndex = 0
 
-                    x <- x + 1
+                    while allowed <> 0 && defIndex < profile.FacilityMapDefs.Length do
+                        let things = map.listerThings.ThingsOfDef(profile.FacilityMapDefs.[defIndex])
 
-                z <- z + 1
+                        let mutable thingIndex = 0
+
+                        while allowed <> 0 && thingIndex < things.Count do
+                            processFacilityThing things.[thingIndex]
+                            thingIndex <- thingIndex + 1
+
+                        defIndex <- defIndex + 1
+                else
+                    // Dense target types fall back to the bounded ThingGrid, so
+                    // cost stays limited by the facility's configured range.
+                    seen.Clear()
+
+                    let mutable z = rect.minZ
+
+                    while allowed <> 0 && z <= rect.maxZ do
+                        let mutable x = rect.minX
+
+                        while allowed <> 0 && x <= rect.maxX do
+                            let things = map.thingGrid.ThingsListAtFast(IntVec3(x, 0, z))
+
+                            let mutable thingIndex = 0
+
+                            while allowed <> 0 && thingIndex < things.Count do
+                                let thing = things.[thingIndex]
+
+                                if seen.Add(thing) then
+                                    processFacilityThing thing
+
+                                thingIndex <- thingIndex + 1
+
+                            x <- x + 1
+
+                        z <- z + 1
 
         if not hasConstraint || allowed = 0 then
             None
@@ -383,7 +562,7 @@ module internal AutoFacing =
 
                         let currentRotation = placingRot.GetValue(designator) :?> Rot4
 
-                        match findFacing map placingDef cell currentRotation with
+                        match findFacing state map placingDef cell currentRotation with
                         | Some facing when facing <> currentRotation -> placingRot.SetValue(designator, facing)
                         | _ -> ()
         | _ -> ()

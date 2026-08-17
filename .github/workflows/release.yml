@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Test
+        run: dotnet test Source/AutoFacingChairs.Tests/AutoFacingChairs.Tests.fsproj -c Release
       - name: Build
         run: dotnet build Source/AutoFacingChairs/AutoFacingChairs.fsproj -c Release
       - name: Verify assemblies
@@ -25,7 +27,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/Auto-Facing-Chairs
-          cp -a About Assemblies Languages Patches dist/Auto-Facing-Chairs/
+          cp -a About Assemblies Languages dist/Auto-Facing-Chairs/
           cd dist
           zip -r Auto-Facing-Chairs-${GITHUB_REF_NAME}.zip Auto-Facing-Chairs
       - name: Release
