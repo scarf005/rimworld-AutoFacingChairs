@@ -7,7 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-PACKAGE_ID = "scarf.chairsnap"
+PACKAGE_ID = "scarf.autofacingchairs"
 CONFIG = Path(
     os.environ.get(
         "RIMWORLD_MODS_CONFIG",
