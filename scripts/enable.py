@@ -16,7 +16,7 @@ CONFIG = Path(
 )
 
 running = subprocess.run(
-    ["pgrep", "-f", "(^|/)RimWorldLinux( |$)"],
+    ["pgrep", "-x", "RimWorldLinux|RimWorld"],
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,
     check=False,
