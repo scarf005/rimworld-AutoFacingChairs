@@ -37,8 +37,7 @@ type AutoFacingLogicTests() =
 
     [<Fact>]
     member _.``adjacent seat joy giver rejects a missing giver type``() =
-        let actual =
-            AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true (Unchecked.defaultof<Type>)
+        let actual = AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true null
 
         Assert.False(actual)
 

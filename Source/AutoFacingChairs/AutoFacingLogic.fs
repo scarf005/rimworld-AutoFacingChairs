@@ -14,8 +14,10 @@ type internal FacilitySearchKind =
     | BoundedOrListed
 
 module internal AutoFacingLogic =
-    let isAdjacentSeatJoyGiver (baseType: Type) requireChair (giverClass: Type) =
-        requireChair && not (isNull giverClass) && baseType.IsAssignableFrom(giverClass)
+    let isAdjacentSeatJoyGiver (baseType: Type) requireChair (giverClass: Type | null) =
+        match giverClass with
+        | NonNull giverClass -> requireChair && baseType.IsAssignableFrom(giverClass)
+        | Null -> false
 
     let tryAdjacentFacing minX maxX minZ maxZ x z =
         if x = minX - 1 && z >= minZ && z <= maxZ then
