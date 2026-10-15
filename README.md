@@ -13,6 +13,7 @@ When you place a sittable chair at a chair-using furniture position, the chair a
 - Works with built furniture, blueprints, and construction frames.
 - Only snaps when the mouse enters a new map cell, so Q/E remains available for manual rotation afterwards.
 - If overlapping interaction cells demand conflicting rotations, the mod leaves the current rotation unchanged.
+- Facilities such as end tables, dressers, and tool cabinets rotate to a facing that links to nearby buildings, preferring the building's own rotation. The `Chairs only` setting limits the mod to sittable furniture.
 - Intended to work with modded furniture and chairs that use vanilla `ThingDef` interaction-cell or eating-surface semantics.
 
 ## Requirements
@@ -38,7 +39,7 @@ RimWorld 1.7 reference assemblies are not public yet, so the release workflow st
 just test
 ```
 
-The unit tests cover adjacent-seat joy-giver detection and the four cardinal chair-facing cases.
+The unit tests cover adjacent-seat joy-giver detection, the four cardinal chair-facing cases, and facility search selection.
 
 ## Formatting
 
