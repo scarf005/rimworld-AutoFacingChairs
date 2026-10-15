@@ -121,6 +121,7 @@ module internal AutoFacing =
         { FacilityTargets: HashSet<ThingDef>
           FacilityMapDefs: ThingDef array
           FacilitySearchKind: FacilitySearchKind
+          FacilityFacesLinearly: bool
           FacilityGridRadius: int }
 
     let private profiles = Dictionary<ThingDef, PlacementProfile>()
@@ -188,11 +189,16 @@ module internal AutoFacing =
         (map: Map)
         (placingDef: ThingDef)
         (placingPos: IntVec3)
+        facesLinearly
         (target: Thing)
         (targetDef: ThingDef)
         =
+        // Vanilla reads the edifice in front of a linear facility without a
+        // bounds check, so rotations facing off the map must not be probed.
         let canLink rotation =
-            CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
+            (not facesLinearly
+             || ContainmentUtility.GetLinearBuildingFrontCell(placingDef, placingPos, rotation).InBounds(map))
+            && CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
                 placingDef,
                 placingPos,
                 rotation,
@@ -230,6 +236,7 @@ module internal AutoFacing =
             { FacilityTargets = emptyTargetDefs
               FacilityMapDefs = emptyMapDefs
               FacilitySearchKind = FacilitySearchKind.BoundedOrListed
+              FacilityFacesLinearly = false
               FacilityGridRadius = 0 }
         | facility ->
             let targets = HashSet<ThingDef>()
@@ -261,6 +268,7 @@ module internal AutoFacing =
             { FacilityTargets = targets
               FacilityMapDefs = mapDefs |> Seq.toArray
               FacilitySearchKind = searchKind
+              FacilityFacesLinearly = facility.mustBePlacedFacingThingLinear
               FacilityGridRadius = gridRadius }
 
     let private profileFor (def: ThingDef) =
@@ -391,7 +399,9 @@ module internal AutoFacing =
             let targetDef = buildableThingDef thing
 
             if profile.FacilityTargets.Contains(targetDef) then
-                match tryFacilityConstraintMask map placingDef placingCell thing targetDef with
+                match
+                    tryFacilityConstraintMask map placingDef placingCell profile.FacilityFacesLinearly thing targetDef
+                with
                 | Some mask -> applyMask mask
                 | None -> ()
 
