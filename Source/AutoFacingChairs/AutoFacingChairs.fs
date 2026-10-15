@@ -245,7 +245,7 @@ module internal AutoFacing =
                 0
         with
         | 0 -> None
-        | vanillaMask -> Some(preferTargetRotation vanillaMask targetDef target.Rotation)
+        | mask -> Some mask
 
     let private radiusForFacilityProps (props: CompProperties_Facility) =
         let minimum = if props.mustBePlacedFacingThingLinear then 8 else 2
@@ -407,6 +407,7 @@ module internal AutoFacing =
 
     let private findFacing (map: Map) (placingDef: ThingDef) (placingCell: IntVec3) (currentRotation: Rot4) =
         let mutable allowed = allRotationsMask
+        let mutable preferred = allRotationsMask
         let mutable hasConstraint = false
         let profile = profileFor placingDef
 
@@ -428,7 +429,9 @@ module internal AutoFacing =
                 match
                     tryFacilityConstraintMask map placingDef placingCell profile.FacilityFacesLinearly thing targetDef
                 with
-                | Some mask -> applyMask mask
+                | Some mask ->
+                    applyMask mask
+                    preferred <- preferred &&& preferTargetRotation mask targetDef thing.Rotation
                 | None -> ()
 
         // Chair lookup only touches cells that can contain an interaction or
@@ -523,13 +526,20 @@ module internal AutoFacing =
 
         seen.Clear()
 
-        if not hasConstraint || allowed = 0 then
+        // Target rotations are only preferences, so they yield when no linking
+        // rotation satisfies all of them.
+        let choice =
+            match allowed &&& preferred with
+            | 0 -> allowed
+            | both -> both
+
+        if not hasConstraint || choice = 0 then
             None
-        elif (allowed &&& rotationBit currentRotation) <> 0 then
+        elif (choice &&& rotationBit currentRotation) <> 0 then
             Some currentRotation
         else
             rotations
-            |> Array.tryFind (fun rotation -> (allowed &&& rotationBit rotation) <> 0)
+            |> Array.tryFind (fun rotation -> (choice &&& rotationBit rotation) <> 0)
 
     let reset () = lastCell <- IntVec3.Invalid
 
