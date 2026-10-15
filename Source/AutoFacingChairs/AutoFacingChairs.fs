@@ -195,22 +195,36 @@ module internal AutoFacing =
 
                 if (mask &&& opposite) <> 0 then opposite else mask
 
+    // This file's top-level values share one static initializer with the
+    // Harmony patches, so a private vanilla method that a later build renames
+    // must not throw there. A missing one logs a warning and falls back, which
+    // skips only the check that uses it.
+    let private privateMethodOr<'Delegate when 'Delegate :> Delegate>
+        (fallback: 'Delegate)
+        (owner: Type)
+        name
+        (parameters: Type array | null)
+        =
+        try
+            AccessTools.MethodDelegate<'Delegate>(AccessTools.Method(owner, name, parameters))
+        with ex ->
+            Log.Warning($"[Auto-Facing Chairs] Skipping the check that uses {owner.Name}.{name}: {ex.Message}")
+            fallback
+
     // Facilities link only within line of sight unless requiresLOS is off, and
     // the public static link check leaves that test to this private one.
     let private facilityHasLineOfSight =
-        AccessTools.MethodDelegate<Func<ThingDef, IntVec3, Rot4, ThingDef, IntVec3, Rot4, Map, bool>>(
-            AccessTools.Method(
-                typeof<CompAffectedByFacilities>,
-                "IsPotentiallyValidFacilityForMe_Static",
-                [| typeof<ThingDef>
-                   typeof<IntVec3>
-                   typeof<Rot4>
-                   typeof<ThingDef>
-                   typeof<IntVec3>
-                   typeof<Rot4>
-                   typeof<Map> |]
-            )
-        )
+        privateMethodOr
+            (Func<ThingDef, IntVec3, Rot4, ThingDef, IntVec3, Rot4, Map, bool>(fun _ _ _ _ _ _ _ -> true))
+            typeof<CompAffectedByFacilities>
+            "IsPotentiallyValidFacilityForMe_Static"
+            [| typeof<ThingDef>
+               typeof<IntVec3>
+               typeof<Rot4>
+               typeof<ThingDef>
+               typeof<IntVec3>
+               typeof<Rot4>
+               typeof<Map> |]
 
     let private tryFacilityConstraintMask
         (map: Map)
@@ -285,14 +299,18 @@ module internal AutoFacing =
             defs |> Seq.toArray
 
     let private watchCellRect =
-        AccessTools.MethodDelegate<Func<ThingDef, IntVec3, Rot4, int, CellRect>>(
-            AccessTools.Method(typeof<WatchBuildingUtility>, "GetWatchCellRect")
-        )
+        privateMethodOr
+            (Func<ThingDef, IntVec3, Rot4, int, CellRect>(fun _ _ _ _ -> CellRect.Empty))
+            typeof<WatchBuildingUtility>
+            "GetWatchCellRect"
+            null
 
     let private everPossibleToWatchFrom =
-        AccessTools.MethodDelegate<Func<IntVec3, IntVec3, Map, bool, ThingDef, bool>>(
-            AccessTools.Method(typeof<WatchBuildingUtility>, "EverPossibleToWatchFrom")
-        )
+        privateMethodOr
+            (Func<IntVec3, IntVec3, Map, bool, ThingDef, bool>(fun _ _ _ _ _ -> false))
+            typeof<WatchBuildingUtility>
+            "EverPossibleToWatchFrom"
+            null
 
     let private watchFacingMask (map: Map) (cell: IntVec3) =
         let mutable mask = 0
