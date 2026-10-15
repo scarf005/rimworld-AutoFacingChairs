@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RIMWORLD_DIR = Path(os.environ.get("RIMWORLD_DIR", "/media/scarf/@steam/SteamLibrary/steamapps/common/RimWorld"))
 DEST = RIMWORLD_DIR / "Mods" / "Auto-Facing-Chairs"
-RUNTIME_PATHS = ("About", "Languages", "Patches", "LoadFolders.xml", "1.6", "1.7")
+RUNTIME_PATHS = ("About", "Languages", "LoadFolders.xml", "1.6", "1.7")
 
 if DEST.name != "Auto-Facing-Chairs":
     raise SystemExit(f"Refusing unsafe destination: {DEST}")
