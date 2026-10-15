@@ -502,7 +502,8 @@ module internal AutoFacing =
 
     let tryApply (designator: Designator_Build) =
         match Find.CurrentMap, designator.PlacingDef with
-        | NonNull map, (:? ThingDef as placingDef) when shouldHandle placingDef ->
+        | null, _ -> ()
+        | map, (:? ThingDef as placingDef) when shouldHandle placingDef ->
             let cell = UI.MouseCell()
 
             let overArchitectPanel =
