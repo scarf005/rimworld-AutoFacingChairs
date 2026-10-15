@@ -28,7 +28,7 @@ When you place a sittable chair at a chair-using furniture position, the chair a
 just build
 ```
 
-`Source/` targets RimWorld 1.7 (.NET 10) and references the local game's `Assembly-CSharp.dll`, `UnityStubs.dll`, and Harmony 3 from `RIMWORLD_DIR`.
+`Source/` targets RimWorld 1.7 (.NET 10) and references the local game's `Assembly-CSharp.dll` and `UnityStubs.dll` from `RIMWORLD_DIR`, and Harmony 3 from its Steam Workshop item under `RIMWORLD_WORKSHOP_DIR` (default: the workshop folder of the library holding `RIMWORLD_DIR`).
 The 1.6 assembly is built from the frozen `rimworld-1.6` branch (`just build-16`).
 
 RimWorld 1.7 reference assemblies are not public yet, so the release workflow stops before building; release locally with `just package <version>`.
