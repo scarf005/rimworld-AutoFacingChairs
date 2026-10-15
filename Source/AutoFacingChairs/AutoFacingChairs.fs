@@ -575,6 +575,16 @@ type internal DesignatorPlaceSelectedUpdatePatch private () =
         | :? Designator_Build as designator -> AutoFacing.tryApply designator
         | _ -> ()
 
+// A click places at the cell under the mouse when the event arrives, which can
+// differ from the cell SelectedUpdate saw earlier in the frame.
+[<HarmonyPatch(typeof<DesignatorManager>, "ProcessInputEvents")>]
+type internal DesignatorManagerProcessInputEventsPatch private () =
+    [<HarmonyPrefix>]
+    static member Prefix(__instance: DesignatorManager) =
+        match __instance.SelectedDesignator with
+        | :? Designator_Build as designator -> AutoFacing.tryApply designator
+        | _ -> ()
+
 [<StaticConstructorOnStartup>]
 type internal AutoFacingBootstrap private () =
     static do Harmony("scarf.chairsnap").PatchAll()
