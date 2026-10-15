@@ -118,8 +118,7 @@ module internal AutoFacing =
             targets
 
     type private PlacementProfile =
-        { Facility: CompProperties_Facility | null
-          FacilityTargets: HashSet<ThingDef>
+        { FacilityTargets: HashSet<ThingDef>
           FacilityMapDefs: ThingDef array
           FacilitySearchKind: FacilitySearchKind
           FacilityGridRadius: int }
@@ -228,8 +227,7 @@ module internal AutoFacing =
     let private buildProfile (def: ThingDef) =
         match def.GetCompProperties<CompProperties_Facility>() with
         | null ->
-            { Facility = null
-              FacilityTargets = emptyTargetDefs
+            { FacilityTargets = emptyTargetDefs
               FacilityMapDefs = emptyMapDefs
               FacilitySearchKind = FacilitySearchKind.BoundedOrListed
               FacilityGridRadius = 0 }
@@ -260,8 +258,7 @@ module internal AutoFacing =
                 | FacilitySearchKind.BoundedOrListed -> radiusForFacilityProps facility + max def.size.x def.size.z
                 | _ -> 0
 
-            { Facility = facility
-              FacilityTargets = targets
+            { FacilityTargets = targets
               FacilityMapDefs = mapDefs |> Seq.toArray
               FacilitySearchKind = searchKind
               FacilityGridRadius = gridRadius }
@@ -423,7 +420,7 @@ module internal AutoFacing =
 
                 offsetIndex <- offsetIndex + 1
 
-        if allowed <> 0 && profile.Facility <> null && profile.FacilityTargets.Count > 0 then
+        if allowed <> 0 && profile.FacilityTargets.Count > 0 then
             match profile.FacilitySearchKind with
             | FacilitySearchKind.CardinalAdjacent
             | FacilitySearchKind.EightWayAdjacent ->
