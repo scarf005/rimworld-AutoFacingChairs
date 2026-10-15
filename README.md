@@ -5,7 +5,7 @@
 
 RimWorld 1.6 and 1.7 quality-of-life mod.
 
-When you place, install, or reinstall a sittable chair at a chair-using furniture position, the chair automatically rotates to face the furniture.
+When you place a sittable chair at a chair-using furniture position, the chair automatically rotates to face the furniture. On RimWorld 1.7 this also happens when you install or reinstall furniture.
 
 - Uses the target furniture's actual interaction-cell definition and `interactionCellIconReverse` value.
 - Supports dining tables and other `surfaceType=Eat` furniture by facing chairs toward the occupied footprint.
@@ -14,7 +14,7 @@ When you place, install, or reinstall a sittable chair at a chair-using furnitur
 - Only snaps when the mouse enters a new map cell, so Q/E remains available for manual rotation afterwards.
 - If overlapping interaction cells demand conflicting rotations, the mod leaves the current rotation unchanged.
 - Facilities such as end tables, dressers, and tool cabinets rotate to a facing that links to nearby buildings, preferring the building's own rotation. The `Chairs only` setting limits the mod to sittable furniture.
-- Chairs placed in a television's watch area face the television when no table, workstation, or facility link sets their facing. The `Face televisions` setting turns this off.
+- On RimWorld 1.7, chairs placed in a television's watch area face the television when no table, workstation, or facility link sets their facing. The `Face televisions` setting turns this off.
 - Intended to work with modded furniture and chairs that use vanilla `ThingDef` interaction-cell or eating-surface semantics.
 
 ## Requirements
