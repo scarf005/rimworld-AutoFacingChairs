@@ -74,12 +74,7 @@ module internal AutoFacing =
 
     let private allRotationsMask = 0b1111
 
-    let private rotationBit (rotation: Rot4) =
-        match rotation.AsInt with
-        | 0 -> 0b0001
-        | 1 -> 0b0010
-        | 2 -> 0b0100
-        | _ -> 0b1000
+    let private rotationBit (rotation: Rot4) = 1 <<< rotation.AsInt
 
     let private isSeat (def: ThingDef) =
         match def.building with
@@ -170,10 +165,10 @@ module internal AutoFacing =
         tryInteractionCellFacing thing def cell
         |> Option.orElseWith (fun () -> tryAdjacentSeatFacing thing def cell)
 
-    let private hasMultipleRotations mask = mask <> 0 && (mask &&& (mask - 1)) <> 0
+    let private hasMultipleRotations mask = (mask &&& (mask - 1)) <> 0
 
     let private preferTargetRotation (mask: int) (targetDef: ThingDef) (targetRotation: Rot4) =
-        if mask = 0 || not targetDef.rotatable || not (hasMultipleRotations mask) then
+        if not targetDef.rotatable || not (hasMultipleRotations mask) then
             mask
         else
             let same = rotationBit targetRotation
