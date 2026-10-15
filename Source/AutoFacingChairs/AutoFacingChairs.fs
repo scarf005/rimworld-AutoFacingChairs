@@ -2,7 +2,6 @@ namespace AutoFacingChairs
 
 open System
 open System.Collections.Generic
-open System.Runtime.CompilerServices
 open HarmonyLib
 open RimWorld
 open UnityEngine
@@ -61,29 +60,12 @@ type AutoFacingMod(content: ModContentPack) as this =
             settings.ChairsOnly <- chairsOnly
             listing.End()
 
-type internal PlacementState() =
-    let mutable hasLastCell = false
-    let mutable lastCell = Unchecked.defaultof<IntVec3>
-    let mutable lastMap: Map | null = null
-    let seen = HashSet<Thing>()
-
-    member _.Seen = seen
-
-    member _.Reset() =
-        hasLastCell <- false
-        lastMap <- null
-        seen.Clear()
-
-    member _.IsSame(map: Map, cell: IntVec3) =
-        hasLastCell && obj.ReferenceEquals(lastMap, map) && lastCell = cell
-
-    member _.Remember(map: Map, cell: IntVec3) =
-        hasLastCell <- true
-        lastMap <- map
-        lastCell <- cell
-
 module internal AutoFacing =
-    let private states = ConditionalWeakTable<Designator_Build, PlacementState>()
+    // One slot suffices: only the selected designator updates, and selecting one
+    // resets it. Designators outlive games, so hold a map id and no things.
+    let mutable private lastMapId = -1
+    let mutable private lastCell = IntVec3.Invalid
+    let private seen = HashSet<Thing>()
 
     let private placingRot =
         AccessTools.FieldRefAccess<Designator_Place, Rot4>("placingRot")
@@ -98,8 +80,6 @@ module internal AutoFacing =
         | 1 -> 0b0010
         | 2 -> 0b0100
         | _ -> 0b1000
-
-    let private stateFor (designator: Designator_Build) = states.GetOrCreateValue(designator)
 
     let private isSeat (def: ThingDef) =
         match def.building with
@@ -394,16 +374,9 @@ module internal AutoFacing =
 
             offsets |> Seq.toArray
 
-    let private findFacing
-        (state: PlacementState)
-        (map: Map)
-        (placingDef: ThingDef)
-        (placingCell: IntVec3)
-        (currentRotation: Rot4)
-        =
+    let private findFacing (map: Map) (placingDef: ThingDef) (placingCell: IntVec3) (currentRotation: Rot4) =
         let mutable allowed = allRotationsMask
         let mutable hasConstraint = false
-        let seen = state.Seen
         let profile = profileFor placingDef
 
         let applyMask mask =
@@ -515,6 +488,8 @@ module internal AutoFacing =
 
                         z <- z + 1
 
+        seen.Clear()
+
         if not hasConstraint || allowed = 0 then
             None
         elif (allowed &&& rotationBit currentRotation) <> 0 then
@@ -523,7 +498,7 @@ module internal AutoFacing =
             rotations
             |> Array.tryFind (fun rotation -> (allowed &&& rotationBit rotation) <> 0)
 
-    let reset (designator: Designator_Build) = (stateFor designator).Reset()
+    let reset () = lastCell <- IntVec3.Invalid
 
     let tryApply (designator: Designator_Build) =
         match Find.CurrentMap, designator.PlacingDef with
@@ -533,26 +508,25 @@ module internal AutoFacing =
             let overArchitectPanel =
                 ArchitectCategoryTab.InfoRect.Contains(UI.MousePositionOnUIInverted)
 
-            if not overArchitectPanel && cell.InBounds(map) then
-                let state = stateFor designator
+            if
+                not overArchitectPanel
+                && cell.InBounds(map)
+                && (cell <> lastCell || map.uniqueID <> lastMapId)
+            then
+                lastMapId <- map.uniqueID
+                lastCell <- cell
 
-                if not (state.IsSame(map, cell)) then
-                    state.Remember(map, cell)
+                let rotation = &placingRot.Invoke(designator)
 
-                    let rotation = &placingRot.Invoke(designator)
-
-                    match findFacing state map placingDef cell rotation with
-                    | Some facing when facing <> rotation -> rotation <- facing
-                    | _ -> ()
+                match findFacing map placingDef cell rotation with
+                | Some facing when facing <> rotation -> rotation <- facing
+                | _ -> ()
         | _ -> ()
 
 [<HarmonyPatch(typeof<Designator_Place>, "Selected")>]
 type internal DesignatorPlaceSelectedPatch private () =
     [<HarmonyPostfix>]
-    static member Postfix(__instance: Designator_Place) =
-        match __instance with
-        | :? Designator_Build as designator -> AutoFacing.reset designator
-        | _ -> ()
+    static member Postfix() = AutoFacing.reset ()
 
 [<HarmonyPatch(typeof<Designator_Place>, "SelectedUpdate")>]
 type internal DesignatorPlaceSelectedUpdatePatch private () =
