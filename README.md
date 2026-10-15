@@ -5,7 +5,7 @@
 
 RimWorld 1.6 and 1.7 quality-of-life mod.
 
-When you place a sittable chair at a chair-using furniture position, the chair automatically rotates to face the furniture.
+When you place, install, or reinstall a sittable chair at a chair-using furniture position, the chair automatically rotates to face the furniture.
 
 - Uses the target furniture's actual interaction-cell definition and `interactionCellIconReverse` value.
 - Supports dining tables and other `surfaceType=Eat` furniture by facing chairs toward the occupied footprint.

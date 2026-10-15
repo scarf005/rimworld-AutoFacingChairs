@@ -588,7 +588,7 @@ module internal AutoFacing =
 
     let reset () = lastCell <- IntVec3.Invalid
 
-    let tryApply (designator: Designator_Build) =
+    let tryApply (designator: Designator_Place) =
         match Find.CurrentMap, designator.PlacingDef with
         | null, _ -> ()
         | map, (:? ThingDef as placingDef) when shouldHandle placingDef ->
@@ -620,19 +620,18 @@ type internal DesignatorPlaceSelectedPatch private () =
 [<HarmonyPatch(typeof<Designator_Place>, "SelectedUpdate")>]
 type internal DesignatorPlaceSelectedUpdatePatch private () =
     [<HarmonyPrefix>]
-    static member Prefix(__instance: Designator_Place) =
-        match __instance with
-        | :? Designator_Build as designator -> AutoFacing.tryApply designator
-        | _ -> ()
+    static member Prefix(__instance: Designator_Place) = AutoFacing.tryApply __instance
 
 // A click places at the cell under the mouse when the event arrives, which can
-// differ from the cell SelectedUpdate saw earlier in the frame.
+// differ from the cell SelectedUpdate saw earlier in the frame. An install
+// designator loses its PlacingDef with the selected thing, and vanilla only
+// deselects it after this prefix.
 [<HarmonyPatch(typeof<DesignatorManager>, "ProcessInputEvents")>]
 type internal DesignatorManagerProcessInputEventsPatch private () =
     [<HarmonyPrefix>]
     static member Prefix(__instance: DesignatorManager) =
         match __instance.SelectedDesignator with
-        | :? Designator_Build as designator -> AutoFacing.tryApply designator
+        | :? Designator_Place as designator when designator.CanRemainSelected() -> AutoFacing.tryApply designator
         | _ -> ()
 
 [<StaticConstructorOnStartup>]
