@@ -185,6 +185,23 @@ module internal AutoFacing =
 
                 if (mask &&& opposite) <> 0 then opposite else mask
 
+    // Facilities link only within line of sight unless requiresLOS is off, and
+    // the public static link check leaves that test to this private one.
+    let private facilityHasLineOfSight =
+        AccessTools.MethodDelegate<Func<ThingDef, IntVec3, Rot4, ThingDef, IntVec3, Rot4, Map, bool>>(
+            AccessTools.Method(
+                typeof<CompAffectedByFacilities>,
+                "IsPotentiallyValidFacilityForMe_Static",
+                [| typeof<ThingDef>
+                   typeof<IntVec3>
+                   typeof<Rot4>
+                   typeof<ThingDef>
+                   typeof<IntVec3>
+                   typeof<Rot4>
+                   typeof<Map> |]
+            )
+        )
+
     let private tryFacilityConstraintMask
         (map: Map)
         (placingDef: ThingDef)
@@ -199,6 +216,15 @@ module internal AutoFacing =
             (not facesLinearly
              || ContainmentUtility.GetLinearBuildingFrontCell(placingDef, placingPos, rotation).InBounds(map))
             && CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
+                placingDef,
+                placingPos,
+                rotation,
+                targetDef,
+                target.Position,
+                target.Rotation,
+                map
+            )
+            && facilityHasLineOfSight.Invoke(
                 placingDef,
                 placingPos,
                 rotation,
