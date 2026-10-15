@@ -8,36 +8,35 @@ open Xunit
 
 type AutoFacingLogicTests() =
     [<Fact>]
-    member _.``adjacent seat joy giver accepts the base type``() =
-        let actual =
-            AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true typeof<Stream>
+    member _.``seated joy giver accepts the base type``() =
+        let actual = AutoFacingLogic.isSeatedJoyGiver typeof<Stream> true typeof<Stream>
 
         Assert.True(actual)
 
     [<Fact>]
-    member _.``adjacent seat joy giver accepts derived types``() =
+    member _.``seated joy giver accepts derived types``() =
         let actual =
-            AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true typeof<MemoryStream>
+            AutoFacingLogic.isSeatedJoyGiver typeof<Stream> true typeof<MemoryStream>
 
         Assert.True(actual)
 
     [<Fact>]
-    member _.``adjacent seat joy giver rejects definitions that do not require a chair``() =
+    member _.``seated joy giver rejects definitions that do not use a seat``() =
         let actual =
-            AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> false typeof<MemoryStream>
+            AutoFacingLogic.isSeatedJoyGiver typeof<Stream> false typeof<MemoryStream>
 
         Assert.False(actual)
 
     [<Fact>]
-    member _.``adjacent seat joy giver rejects unrelated giver types``() =
+    member _.``seated joy giver rejects unrelated giver types``() =
         let actual =
-            AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true typeof<StringBuilder>
+            AutoFacingLogic.isSeatedJoyGiver typeof<Stream> true typeof<StringBuilder>
 
         Assert.False(actual)
 
     [<Fact>]
-    member _.``adjacent seat joy giver rejects a missing giver type``() =
-        let actual = AutoFacingLogic.isAdjacentSeatJoyGiver typeof<Stream> true null
+    member _.``seated joy giver rejects a missing giver type``() =
+        let actual = AutoFacingLogic.isSeatedJoyGiver typeof<Stream> true null
 
         Assert.False(actual)
 
@@ -107,3 +106,38 @@ type AutoFacingLogicTests() =
         =
         let actual = AutoFacingLogic.preferListedTargetScan targetCount gridCellCount
         Assert.Equal(expected, actual)
+
+    [<Fact>]
+    member _.``hard constraints win over a watch area``() =
+        let actual = AutoFacingLogic.resolveRotation true 0b0010 0b1111 0b0001 2
+        Assert.Equal<int option>(Some 1, actual)
+
+    [<Fact>]
+    member _.``conflicting hard constraints keep the current rotation despite a watch area``() =
+        let actual = AutoFacingLogic.resolveRotation true 0 0b1111 0b0001 2
+        Assert.Equal<int option>(None, actual)
+
+    [<Fact>]
+    member _.``watch area turns an unconstrained seat``() =
+        let actual = AutoFacingLogic.resolveRotation false 0b1111 0b1111 0b0100 0
+        Assert.Equal<int option>(Some 2, actual)
+
+    [<Fact>]
+    member _.``unconstrained seat outside a watch area keeps its rotation``() =
+        let actual = AutoFacingLogic.resolveRotation false 0b1111 0b1111 0 3
+        Assert.Equal<int option>(None, actual)
+
+    [<Fact>]
+    member _.``current rotation stays when it satisfies the mask``() =
+        let actual = AutoFacingLogic.resolveRotation false 0b1111 0b1111 0b1010 3
+        Assert.Equal<int option>(Some 3, actual)
+
+    [<Fact>]
+    member _.``target preferences narrow the allowed rotations``() =
+        let actual = AutoFacingLogic.resolveRotation true 0b1010 0b1000 0 1
+        Assert.Equal<int option>(Some 3, actual)
+
+    [<Fact>]
+    member _.``target preferences yield when no allowed rotation satisfies them``() =
+        let actual = AutoFacingLogic.resolveRotation true 0b1010 0b0101 0 0
+        Assert.Equal<int option>(Some 1, actual)

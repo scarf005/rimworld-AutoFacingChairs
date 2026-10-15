@@ -11,13 +11,19 @@ type AutoFacingSettings() =
     inherit ModSettings()
 
     let mutable chairsOnly = false
+    let mutable faceWatchBuildings = true
 
     member _.ChairsOnly
         with get () = chairsOnly
         and set value = chairsOnly <- value
 
+    member _.FaceWatchBuildings
+        with get () = faceWatchBuildings
+        and set value = faceWatchBuildings <- value
+
     override _.ExposeData() =
         Scribe_Values.Look(&chairsOnly, "chairsOnly", false)
+        Scribe_Values.Look(&faceWatchBuildings, "faceWatchBuildings", true)
 
 module internal SettingsState =
     let mutable private current: AutoFacingSettings | null = null
@@ -28,6 +34,11 @@ module internal SettingsState =
         match current with
         | null -> false
         | settings -> settings.ChairsOnly
+
+    let faceWatchBuildings () =
+        match current with
+        | null -> true
+        | settings -> settings.FaceWatchBuildings
 
 type AutoFacingMod(content: ModContentPack) as this =
     inherit Mod(content)
@@ -50,6 +61,7 @@ type AutoFacingMod(content: ModContentPack) as this =
             listing.Begin(inRect)
 
             let mutable chairsOnly = settings.ChairsOnly
+            let mutable faceWatchBuildings = settings.FaceWatchBuildings
 
             listing.CheckboxLabeled(
                 "AutoFacingChairs_ChairsOnly".Translate(),
@@ -57,7 +69,14 @@ type AutoFacingMod(content: ModContentPack) as this =
                 "AutoFacingChairs_ChairsOnlyDesc".Translate()
             )
 
+            listing.CheckboxLabeled(
+                "AutoFacingChairs_FaceWatchBuildings".Translate(),
+                &faceWatchBuildings,
+                "AutoFacingChairs_FaceWatchBuildingsDesc".Translate()
+            )
+
             settings.ChairsOnly <- chairsOnly
+            settings.FaceWatchBuildings <- faceWatchBuildings
             listing.End()
 
 module internal AutoFacing =
@@ -91,26 +110,22 @@ module internal AutoFacing =
         | :? ThingDef as def -> def
         | _ -> thing.def
 
+    let private seatedJoyTargets (baseType: Type) (usesSeat: JoyGiverDef -> bool) =
+        let targets = HashSet<ThingDef>()
+
+        for joyGiver in DefDatabase<JoyGiverDef>.AllDefsListForReading do
+            match joyGiver.thingDefs with
+            | NonNull defs when AutoFacingLogic.isSeatedJoyGiver baseType (usesSeat joyGiver) joyGiver.giverClass ->
+                for def in defs do
+                    match def with
+                    | null -> ()
+                    | def -> targets.Add(def) |> ignore
+            | _ -> ()
+
+        targets
+
     let private adjacentSeatTargets =
-        lazy
-            let targets = HashSet<ThingDef>()
-            let joyGivers = DefDatabase<JoyGiverDef>.AllDefsListForReading
-            let baseType = typeof<JoyGiver_InteractBuildingSitAdjacent>
-
-            for index = 0 to joyGivers.Count - 1 do
-                let joyGiver = joyGivers.[index]
-
-                match joyGiver.thingDefs with
-                | NonNull defs when
-                    AutoFacingLogic.isAdjacentSeatJoyGiver baseType joyGiver.requireChair joyGiver.giverClass
-                    ->
-                    for def in defs do
-                        match def with
-                        | null -> ()
-                        | def -> targets.Add(def) |> ignore
-                | _ -> ()
-
-            targets
+        lazy seatedJoyTargets typeof<JoyGiver_InteractBuildingSitAdjacent> _.requireChair
 
     type private PlacementProfile =
         { FacilityTargets: HashSet<ThingDef>
@@ -251,6 +266,51 @@ module internal AutoFacing =
         | null -> ()
         | def -> defs.Add(def) |> ignore
 
+    let private addBuildableMapDefs (defs: HashSet<ThingDef>) (def: ThingDef) =
+        addMapDef defs def
+        addMapDef defs def.blueprintDef
+        addMapDef defs def.installBlueprintDef
+        addMapDef defs def.frameDef
+
+    // Pawns pick seats for these joy givers by the watch area, and prefer a
+    // seat that faces the building.
+    let private watchMapDefs =
+        lazy
+            let defs = HashSet<ThingDef>()
+
+            for def in seatedJoyTargets typeof<JoyGiver_WatchBuilding> _.desireSit do
+                if def.building <> null then
+                    addBuildableMapDefs defs def
+
+            defs |> Seq.toArray
+
+    let private watchCellRect =
+        AccessTools.MethodDelegate<Func<ThingDef, IntVec3, Rot4, int, CellRect>>(
+            AccessTools.Method(typeof<WatchBuildingUtility>, "GetWatchCellRect")
+        )
+
+    let private everPossibleToWatchFrom =
+        AccessTools.MethodDelegate<Func<IntVec3, IntVec3, Map, bool, ThingDef, bool>>(
+            AccessTools.Method(typeof<WatchBuildingUtility>, "EverPossibleToWatchFrom")
+        )
+
+    let private watchFacingMask (map: Map) (cell: IntVec3) =
+        let mutable mask = 0
+
+        for mapDef in watchMapDefs.Value do
+            for thing in map.listerThings.ThingsOfDef(mapDef) do
+                let def = buildableThingDef thing
+
+                for direction in rotations do
+                    if
+                        (not def.rotatable || direction = thing.Rotation)
+                        && watchCellRect.Invoke(def, thing.Position, thing.Rotation, direction.AsInt).Contains(cell)
+                        && everPossibleToWatchFrom.Invoke(cell, thing.Position, map, false, def)
+                    then
+                        mask <- mask ||| rotationBit direction.Opposite
+
+        mask
+
     let private buildProfile (def: ThingDef) =
         match def.GetCompProperties<CompProperties_Facility>() with
         | null ->
@@ -268,11 +328,7 @@ module internal AutoFacing =
             | buildings ->
                 for target in buildings do
                     match target with
-                    | NonNull target when targets.Add(target) ->
-                        addMapDef mapDefs target
-                        addMapDef mapDefs target.blueprintDef
-                        addMapDef mapDefs target.installBlueprintDef
-                        addMapDef mapDefs target.frameDef
+                    | NonNull target when targets.Add(target) -> addBuildableMapDefs mapDefs target
                     | _ -> ()
 
             let searchKind =
@@ -521,20 +577,14 @@ module internal AutoFacing =
 
         seen.Clear()
 
-        // Target rotations are only preferences, so they yield when no linking
-        // rotation satisfies all of them.
-        let choice =
-            match allowed &&& preferred with
-            | 0 -> allowed
-            | both -> both
+        let watch =
+            if not hasConstraint && isSeat placingDef && SettingsState.faceWatchBuildings () then
+                watchFacingMask map placingCell
+            else
+                0
 
-        if not hasConstraint || choice = 0 then
-            None
-        elif (choice &&& rotationBit currentRotation) <> 0 then
-            Some currentRotation
-        else
-            rotations
-            |> Array.tryFind (fun rotation -> (choice &&& rotationBit rotation) <> 0)
+        AutoFacingLogic.resolveRotation hasConstraint allowed preferred watch currentRotation.AsInt
+        |> Option.map Rot4
 
     let reset () = lastCell <- IntVec3.Invalid
 
