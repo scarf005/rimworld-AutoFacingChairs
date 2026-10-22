@@ -11,21 +11,38 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RIMWORLD_DIR: ${{ github.workspace }}/RimWorld
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.x"
+      - name: Test
+        run: dotnet test Source/AutoFacingChairs.Tests/AutoFacingChairs.Tests.fsproj -c Release
+      - name: Check RimWorld 1.7 references
+        run: |
+          test -f "$RIMWORLD_DIR/UnityStubs.dll" || {
+            echo "::error::RimWorld 1.7 reference assemblies are not publicly available; release locally with 'just package <version>'."
+            exit 1
+          }
       - name: Build
-        run: dotnet build Source/AutoFacingChairs/AutoFacingChairs.fsproj -c Release
+        run: |
+          dotnet build Source/AutoFacingChairs/AutoFacingChairs.fsproj -c Release
+          mkdir -p Source/obj/rimworld-1.6
+          git archive origin/rimworld-1.6 Source | tar -x -C Source/obj/rimworld-1.6
+          dotnet build Source/obj/rimworld-1.6/Source/AutoFacingChairs/AutoFacingChairs.fsproj -c Release -p:OutputPath="$PWD/1.6/Assemblies/"
       - name: Verify assemblies
         run: |
-          test -f Assemblies/AutoFacingChairs.dll
-          test ! -e Assemblies/FSharp.Core.dll
+          test -f 1.6/Assemblies/AutoFacingChairs.dll
+          test ! -e 1.6/Assemblies/FSharp.Core.dll
+          test -f 1.7/Assemblies/AutoFacingChairs.dll
+          test ! -e 1.7/Assemblies/FSharp.Core.dll
       - name: Package
         run: |
           mkdir -p dist/Auto-Facing-Chairs
-          cp -a About Assemblies Languages Patches dist/Auto-Facing-Chairs/
+          cp -a About Languages LoadFolders.xml 1.6 1.7 dist/Auto-Facing-Chairs/
           cd dist
           zip -r Auto-Facing-Chairs-${GITHUB_REF_NAME}.zip Auto-Facing-Chairs
       - name: Release

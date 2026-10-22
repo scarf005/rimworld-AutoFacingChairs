@@ -2,37 +2,48 @@ namespace AutoFacingChairs
 
 open System
 open System.Collections.Generic
-open System.Runtime.CompilerServices
 open HarmonyLib
 open RimWorld
 open UnityEngine
 open Verse
 
-[<AllowNullLiteral>]
 type AutoFacingSettings() =
     inherit ModSettings()
 
     let mutable chairsOnly = false
+    let mutable faceWatchBuildings = true
 
     member _.ChairsOnly
         with get () = chairsOnly
         and set value = chairsOnly <- value
 
+    member _.FaceWatchBuildings
+        with get () = faceWatchBuildings
+        and set value = faceWatchBuildings <- value
+
     override _.ExposeData() =
         Scribe_Values.Look(&chairsOnly, "chairsOnly", false)
+        Scribe_Values.Look(&faceWatchBuildings, "faceWatchBuildings", true)
 
 module internal SettingsState =
-    let mutable private current: AutoFacingSettings = null
+    let mutable private current: AutoFacingSettings | null = null
 
     let setCurrent settings = current <- settings
 
     let chairsOnly () =
-        not (isNull current) && current.ChairsOnly
+        match current with
+        | null -> false
+        | settings -> settings.ChairsOnly
+
+    let faceWatchBuildings () =
+        match current with
+        | null -> true
+        | settings -> settings.FaceWatchBuildings
 
 type AutoFacingMod(content: ModContentPack) as this =
     inherit Mod(content)
 
-    let mutable settings: AutoFacingSettings = null
+    let mutable settings: AutoFacingSettings | null = null
 
     do
         LongEventHandler.ExecuteWhenFinished(fun () ->
@@ -43,11 +54,14 @@ type AutoFacingMod(content: ModContentPack) as this =
         "AutoFacingChairs_SettingsCategory".Translate().Resolve()
 
     override _.DoSettingsWindowContents(inRect: Rect) =
-        if not (isNull settings) then
+        match settings with
+        | null -> ()
+        | settings ->
             let listing = Listing_Standard()
             listing.Begin(inRect)
 
             let mutable chairsOnly = settings.ChairsOnly
+            let mutable faceWatchBuildings = settings.FaceWatchBuildings
 
             listing.CheckboxLabeled(
                 "AutoFacingChairs_ChairsOnly".Translate(),
@@ -55,49 +69,38 @@ type AutoFacingMod(content: ModContentPack) as this =
                 "AutoFacingChairs_ChairsOnlyDesc".Translate()
             )
 
+            listing.CheckboxLabeled(
+                "AutoFacingChairs_FaceWatchBuildings".Translate(),
+                &faceWatchBuildings,
+                "AutoFacingChairs_FaceWatchBuildingsDesc".Translate()
+            )
+
             settings.ChairsOnly <- chairsOnly
+            settings.FaceWatchBuildings <- faceWatchBuildings
             listing.End()
 
-type internal PlacementState() =
-    let mutable hasLastCell = false
-    let mutable lastCell = Unchecked.defaultof<IntVec3>
-    let mutable lastMap: Map = null
-
-    member _.Reset() =
-        hasLastCell <- false
-        lastMap <- null
-
-    member _.IsSame(map: Map, cell: IntVec3) =
-        hasLastCell && obj.ReferenceEquals(lastMap, map) && lastCell = cell
-
-    member _.Remember(map: Map, cell: IntVec3) =
-        hasLastCell <- true
-        lastMap <- map
-        lastCell <- cell
-
 module internal AutoFacing =
-    let private states = ConditionalWeakTable<Designator_Build, PlacementState>()
+    // One slot suffices: only the selected designator updates, and selecting one
+    // resets it. Designators outlive games, so hold a map id and no things.
+    let mutable private lastMapId = -1
+    let mutable private lastCell = IntVec3.Invalid
+    let private seen = HashSet<Thing>()
 
-    let private placingRotField =
-        AccessTools.Field(typeof<Designator_Place>, "placingRot") |> Option.ofObj
+    let private placingRot =
+        AccessTools.FieldRefAccess<Designator_Place, Rot4>("placingRot")
 
     let private rotations = [| Rot4.North; Rot4.East; Rot4.South; Rot4.West |]
 
     let private allRotationsMask = 0b1111
 
-    let private rotationBit (rotation: Rot4) =
-        if rotation = Rot4.North then 0b0001
-        elif rotation = Rot4.East then 0b0010
-        elif rotation = Rot4.South then 0b0100
-        else 0b1000
-
-    let private stateFor (designator: Designator_Build) = states.GetOrCreateValue(designator)
+    let private rotationBit (rotation: Rot4) = 1 <<< rotation.AsInt
 
     let private isSeat (def: ThingDef) =
-        not (isNull def.building) && def.building.isSittable
+        match def.building with
+        | null -> false
+        | building -> building.isSittable
 
-    let private isRotatableFurniture (def: ThingDef) =
-        def.rotatable && not (isNull def.building)
+    let private isRotatableFurniture (def: ThingDef) = def.rotatable && def.building <> null
 
     let private shouldHandle (def: ThingDef) =
         isRotatableFurniture def && (not (SettingsState.chairsOnly ()) || isSeat def)
@@ -107,77 +110,80 @@ module internal AutoFacing =
         | :? ThingDef as def -> def
         | _ -> thing.def
 
-    let private containsDef (defs: List<ThingDef>) (def: ThingDef) = not (isNull defs) && defs.Contains(def)
+    let private seatedJoyTargets (baseType: Type) (usesSeat: JoyGiverDef -> bool) =
+        let targets = HashSet<ThingDef>()
+
+        for joyGiver in DefDatabase<JoyGiverDef>.AllDefsListForReading do
+            match joyGiver.thingDefs with
+            | NonNull defs when AutoFacingLogic.isSeatedJoyGiver baseType (usesSeat joyGiver) joyGiver.giverClass ->
+                for def in defs do
+                    match def with
+                    | null -> ()
+                    | def -> targets.Add(def) |> ignore
+            | _ -> ()
+
+        targets
+
+    let private adjacentSeatTargets =
+        lazy seatedJoyTargets typeof<JoyGiver_InteractBuildingSitAdjacent> _.requireChair
+
+    type private PlacementProfile =
+        { FacilityTargets: HashSet<ThingDef>
+          FacilityMapDefs: ThingDef array
+          FacilitySearchKind: FacilitySearchKind
+          FacilityFacesLinearly: bool
+          FacilityGridRadius: int }
+
+    let private profiles = Dictionary<ThingDef, PlacementProfile>()
+    let private emptyTargetDefs = HashSet<ThingDef>()
+    let private emptyMapDefs: ThingDef array = [||]
 
     let private hasInteractionCellAt (def: ThingDef) (center: IntVec3) (rotation: Rot4) (cell: IntVec3) =
-        let offsets = def.multipleInteractionCellOffsets
-
-        if not (isNull offsets) && offsets.Count > 0 then
-            let mutable found = false
-            let mutable index = 0
-
-            while not found && index < offsets.Count do
-                found <- ThingUtility.InteractionCell(offsets.[index], center, rotation) = cell
-
-                index <- index + 1
-
-            found
-        else
+        match def.multipleInteractionCellOffsets with
+        | NonNull offsets when offsets.Count > 0 ->
+            offsets.Exists(fun offset -> ThingUtility.InteractionCell(offset, center, rotation) = cell)
+        | _ ->
             def.hasInteractionCell
             && ThingUtility.InteractionCell(def.interactionCellOffset, center, rotation) = cell
 
     let private tryInteractionCellFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
-        let icon = def.interactionCellIcon
-
-        if
-            not (isNull icon)
-            && isSeat icon
-            && hasInteractionCellAt def thing.Position thing.Rotation cell
-        then
+        match def.interactionCellIcon with
+        | NonNull icon when isSeat icon && hasInteractionCellAt def thing.Position thing.Rotation cell ->
             Some(
                 if def.interactionCellIconReverse then
                     thing.Rotation.Opposite
                 else
                     thing.Rotation
             )
-        else
-            None
+        | _ -> None
 
-    let private tryTableFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
-        if def.surfaceType <> SurfaceType.Eat then
+    let private toRot4 =
+        function
+        | CardinalFacing.North -> Rot4.North
+        | CardinalFacing.East -> Rot4.East
+        | CardinalFacing.South -> Rot4.South
+        | CardinalFacing.West -> Rot4.West
+
+    let private tryAdjacentSeatFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
+        let usesAdjacentSeat =
+            def.surfaceType = SurfaceType.Eat || adjacentSeatTargets.Value.Contains(def)
+
+        if not usesAdjacentSeat then
             None
         else
             let rect = GenAdj.OccupiedRect(thing.Position, thing.Rotation, def.size)
 
-            if cell.x = rect.minX - 1 && cell.z >= rect.minZ && cell.z <= rect.maxZ then
-                Some Rot4.East
-            elif cell.x = rect.maxX + 1 && cell.z >= rect.minZ && cell.z <= rect.maxZ then
-                Some Rot4.West
-            elif cell.z = rect.minZ - 1 && cell.x >= rect.minX && cell.x <= rect.maxX then
-                Some Rot4.North
-            elif cell.z = rect.maxZ + 1 && cell.x >= rect.minX && cell.x <= rect.maxX then
-                Some Rot4.South
-            else
-                None
+            AutoFacingLogic.tryAdjacentFacing rect.minX rect.maxX rect.minZ rect.maxZ cell.x cell.z
+            |> Option.map toRot4
 
     let private tryChairFacing (thing: Thing) (def: ThingDef) (cell: IntVec3) =
-        match tryInteractionCellFacing thing def cell with
-        | Some facing -> Some facing
-        | None -> tryTableFacing thing def cell
+        tryInteractionCellFacing thing def cell
+        |> Option.orElseWith (fun () -> tryAdjacentSeatFacing thing def cell)
 
-    let private validRotationsMask predicate =
-        let mutable mask = 0
-
-        for rotation in rotations do
-            if predicate rotation then
-                mask <- mask ||| rotationBit rotation
-
-        mask
-
-    let private hasMultipleRotations mask = mask <> 0 && (mask &&& (mask - 1)) <> 0
+    let private hasMultipleRotations mask = (mask &&& (mask - 1)) <> 0
 
     let private preferTargetRotation (mask: int) (targetDef: ThingDef) (targetRotation: Rot4) =
-        if mask = 0 || not targetDef.rotatable || not (hasMultipleRotations mask) then
+        if not targetDef.rotatable || not (hasMultipleRotations mask) then
             mask
         else
             let same = rotationBit targetRotation
@@ -189,69 +195,262 @@ module internal AutoFacing =
 
                 if (mask &&& opposite) <> 0 then opposite else mask
 
+    // This file's top-level values share one static initializer with the
+    // Harmony patches, so a private vanilla method that a later build renames
+    // must not throw there. A missing one logs a warning and falls back, which
+    // skips only the check that uses it.
+    let private privateMethodOr<'Delegate when 'Delegate :> Delegate>
+        (fallback: 'Delegate)
+        (owner: Type)
+        name
+        (parameters: Type array | null)
+        =
+        try
+            AccessTools.MethodDelegate<'Delegate>(AccessTools.Method(owner, name, parameters))
+        with ex ->
+            Log.Warning($"[Auto-Facing Chairs] Skipping the check that uses {owner.Name}.{name}: {ex.Message}")
+            fallback
+
+    // Facilities link only within line of sight unless requiresLOS is off, and
+    // the public static link check leaves that test to this private one.
+    let private facilityHasLineOfSight =
+        privateMethodOr
+            (Func<ThingDef, IntVec3, Rot4, ThingDef, IntVec3, Rot4, Map, bool>(fun _ _ _ _ _ _ _ -> true))
+            typeof<CompAffectedByFacilities>
+            "IsPotentiallyValidFacilityForMe_Static"
+            [| typeof<ThingDef>
+               typeof<IntVec3>
+               typeof<Rot4>
+               typeof<ThingDef>
+               typeof<IntVec3>
+               typeof<Rot4>
+               typeof<Map> |]
 
     let private tryFacilityConstraintMask
         (map: Map)
         (placingDef: ThingDef)
         (placingPos: IntVec3)
+        facesLinearly
         (target: Thing)
         (targetDef: ThingDef)
         =
-        let placingFacility = placingDef.GetCompProperties<CompProperties_Facility>()
+        // Vanilla reads the edifice in front of a linear facility without a
+        // bounds check, so rotations facing off the map must not be probed.
+        let canLink rotation =
+            (not facesLinearly
+             || ContainmentUtility.GetLinearBuildingFrontCell(placingDef, placingPos, rotation).InBounds(map))
+            && CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
+                placingDef,
+                placingPos,
+                rotation,
+                targetDef,
+                target.Position,
+                target.Rotation,
+                map
+            )
+            && facilityHasLineOfSight.Invoke(
+                placingDef,
+                placingPos,
+                rotation,
+                targetDef,
+                target.Position,
+                target.Rotation,
+                map
+            )
 
-        let targetAffected =
-            targetDef.GetCompProperties<CompProperties_AffectedByFacilities>()
-
-        let mutable hasConstraint = false
-        let mutable allowed = allRotationsMask
-
-        let applyRelation mask =
-            if mask <> 0 then
-                hasConstraint <- true
-                allowed <- allowed &&& mask
-
-        if
-            not (isNull placingFacility)
-            && not (isNull targetAffected)
-            && containsDef targetAffected.linkableFacilities placingDef
-        then
-            let vanillaMask =
-                validRotationsMask (fun rotation ->
-                    CompAffectedByFacilities.CanPotentiallyLinkTo_Static(
-                        placingDef,
-                        placingPos,
-                        rotation,
-                        targetDef,
-                        target.Position,
-                        target.Rotation,
-                        map
-                    ))
-
-            let mask = preferTargetRotation vanillaMask targetDef target.Rotation
-
-            applyRelation mask
-
-        if hasConstraint then Some allowed else None
+        match
+            rotations
+            |> Array.fold
+                (fun mask rotation ->
+                    if canLink rotation then
+                        mask ||| rotationBit rotation
+                    else
+                        mask)
+                0
+        with
+        | 0 -> None
+        | mask -> Some mask
 
     let private radiusForFacilityProps (props: CompProperties_Facility) =
-        if
-            props.mustBePlacedAdjacent
-            || props.mustBePlacedAdjacentCardinalToBedHead
-            || props.mustBePlacedAdjacentCardinalToAndFacingBedHead
-        then
-            2
-        elif props.mustBePlacedFacingThingLinear then
-            max 8 (int (Math.Ceiling(float props.maxDistance)) + 2)
-        else
-            max 2 (int (Math.Ceiling(float props.maxDistance)) + 2)
+        let minimum = if props.mustBePlacedFacingThingLinear then 8 else 2
+        max minimum (int (Math.Ceiling(float props.maxDistance)) + 2)
 
-    let private facilitySearchRadius (placingDef: ThingDef) =
-        let facility = placingDef.GetCompProperties<CompProperties_Facility>()
+    let private addMapDef (defs: HashSet<ThingDef>) (def: ThingDef | null) =
+        match def with
+        | null -> ()
+        | def -> defs.Add(def) |> ignore
 
-        if isNull facility then
-            0
+    let private addBuildableMapDefs (defs: HashSet<ThingDef>) (def: ThingDef) =
+        addMapDef defs def
+        addMapDef defs def.blueprintDef
+        addMapDef defs def.installBlueprintDef
+        addMapDef defs def.frameDef
+
+    // Pawns pick seats for these joy givers by the watch area, and prefer a
+    // seat that faces the building.
+    let private watchMapDefs =
+        lazy
+            let defs = HashSet<ThingDef>()
+
+            for def in seatedJoyTargets typeof<JoyGiver_WatchBuilding> _.desireSit do
+                if def.building <> null then
+                    addBuildableMapDefs defs def
+
+            defs |> Seq.toArray
+
+    let private watchCellRect =
+        privateMethodOr
+            (Func<ThingDef, IntVec3, Rot4, int, CellRect>(fun _ _ _ _ -> CellRect.Empty))
+            typeof<WatchBuildingUtility>
+            "GetWatchCellRect"
+            null
+
+    let private everPossibleToWatchFrom =
+        privateMethodOr
+            (Func<IntVec3, IntVec3, Map, bool, ThingDef, bool>(fun _ _ _ _ _ -> false))
+            typeof<WatchBuildingUtility>
+            "EverPossibleToWatchFrom"
+            null
+
+    let private watchFacingMask (map: Map) (cell: IntVec3) =
+        let mutable mask = 0
+
+        for mapDef in watchMapDefs.Value do
+            for thing in map.listerThings.ThingsOfDef(mapDef) do
+                let def = buildableThingDef thing
+
+                for direction in rotations do
+                    if
+                        (not def.rotatable || direction = thing.Rotation)
+                        && watchCellRect.Invoke(def, thing.Position, thing.Rotation, direction.AsInt).Contains(cell)
+                        && everPossibleToWatchFrom.Invoke(cell, thing.Position, map, false, def)
+                    then
+                        mask <- mask ||| rotationBit direction.Opposite
+
+        mask
+
+    let private buildProfile (def: ThingDef) =
+        match def.GetCompProperties<CompProperties_Facility>() with
+        | null ->
+            { FacilityTargets = emptyTargetDefs
+              FacilityMapDefs = emptyMapDefs
+              FacilitySearchKind = FacilitySearchKind.BoundedOrListed
+              FacilityFacesLinearly = false
+              FacilityGridRadius = 0 }
+        | facility ->
+            let targets = HashSet<ThingDef>()
+            let mapDefs = HashSet<ThingDef>()
+
+            match facility.linkableBuildings with
+            | null -> ()
+            | buildings ->
+                for target in buildings do
+                    match target with
+                    | NonNull target when targets.Add(target) -> addBuildableMapDefs mapDefs target
+                    | _ -> ()
+
+            let searchKind =
+                AutoFacingLogic.facilitySearchKind
+                    facility.mustBePlacedAdjacent
+                    facility.mustBePlacedAdjacentCardinalToBedHead
+                    facility.mustBePlacedAdjacentCardinalToAndFacingBedHead
+
+            let gridRadius =
+                match searchKind with
+                | FacilitySearchKind.BoundedOrListed -> radiusForFacilityProps facility + max def.size.x def.size.z
+                | _ -> 0
+
+            { FacilityTargets = targets
+              FacilityMapDefs = mapDefs |> Seq.toArray
+              FacilitySearchKind = searchKind
+              FacilityFacesLinearly = facility.mustBePlacedFacingThingLinear
+              FacilityGridRadius = gridRadius }
+
+    let private profileFor (def: ThingDef) =
+        let mutable profile = Unchecked.defaultof<PlacementProfile>
+
+        if profiles.TryGetValue(def, &profile) then
+            profile
         else
-            radiusForFacilityProps facility + max placingDef.size.x placingDef.size.z
+            let profile = buildProfile def
+            profiles.Add(def, profile)
+            profile
+
+    let private addThingsAtCell (map: Map) (seen: HashSet<Thing>) (cell: IntVec3) =
+        if cell.InBounds(map) then
+            let things = map.thingGrid.ThingsListAtFast(cell)
+
+            for thing in things do
+                seen.Add(thing) |> ignore
+
+    let private addCardinalPerimeter (map: Map) (seen: HashSet<Thing>) (rect: CellRect) =
+        let minX = rect.minX
+        let maxX = rect.maxX
+        let minZ = rect.minZ
+        let maxZ = rect.maxZ
+
+        for x = minX to maxX do
+            addThingsAtCell map seen (IntVec3(x, 0, minZ - 1))
+            addThingsAtCell map seen (IntVec3(x, 0, maxZ + 1))
+
+        for z = minZ to maxZ do
+            addThingsAtCell map seen (IntVec3(minX - 1, 0, z))
+            addThingsAtCell map seen (IntVec3(maxX + 1, 0, z))
+
+    let private addEightWayPerimeter (map: Map) (seen: HashSet<Thing>) (rect: CellRect) =
+        let minX = rect.minX - 1
+        let maxX = rect.maxX + 1
+        let minZ = rect.minZ - 1
+        let maxZ = rect.maxZ + 1
+
+        for x = minX to maxX do
+            addThingsAtCell map seen (IntVec3(x, 0, minZ))
+            addThingsAtCell map seen (IntVec3(x, 0, maxZ))
+
+        for z = minZ + 1 to maxZ - 1 do
+            addThingsAtCell map seen (IntVec3(minX, 0, z))
+            addThingsAtCell map seen (IntVec3(maxX, 0, z))
+
+    let private collectAdjacentFacilityCandidates
+        (map: Map)
+        (placingDef: ThingDef)
+        (placingCell: IntVec3)
+        searchKind
+        (seen: HashSet<Thing>)
+        =
+        seen.Clear()
+
+        let rotationCount =
+            if placingDef.size.x = 1 && placingDef.size.z = 1 then
+                1
+            else
+                rotations.Length
+
+        for rotationIndex = 0 to rotationCount - 1 do
+            let rect =
+                GenAdj.OccupiedRect(placingCell, rotations.[rotationIndex], placingDef.size)
+
+            match searchKind with
+            | FacilitySearchKind.CardinalAdjacent -> addCardinalPerimeter map seen rect
+            | FacilitySearchKind.EightWayAdjacent -> addEightWayPerimeter map seen rect
+            | FacilitySearchKind.BoundedOrListed -> ()
+
+    let private boundedGridRect (map: Map) (placingCell: IntVec3) radius =
+        let minX = max 0 (placingCell.x - radius)
+        let maxX = min (map.Size.x - 1) (placingCell.x + radius)
+        let minZ = max 0 (placingCell.z - radius)
+        let maxZ = min (map.Size.z - 1) (placingCell.z + radius)
+        CellRect(minX, minZ, maxX - minX + 1, maxZ - minZ + 1)
+
+    let private listedTargetCountAtMost (map: Map) (mapDefs: ThingDef array) limit =
+        let mutable count = 0L
+        let mutable index = 0
+
+        while count * 4L <= limit && index < mapDefs.Length do
+            count <- count + int64 (map.listerThings.ThingsOfDef(mapDefs.[index]).Count)
+            index <- index + 1
+
+        count
 
     let private chairCandidateOffsets =
         lazy
@@ -264,47 +463,51 @@ module internal AutoFacing =
 
                     offsets.Add(IntVec3(-rotated.x, 0, -rotated.z)) |> ignore
 
-            let defs = DefDatabase<ThingDef>.AllDefsListForReading
-
-            for index = 0 to defs.Count - 1 do
-                let def = defs.[index]
-                let icon = def.interactionCellIcon
-
-                if not (isNull icon) && isSeat icon then
-                    let interactionOffsets = def.multipleInteractionCellOffsets
-
-                    if not (isNull interactionOffsets) && interactionOffsets.Count > 0 then
-                        for offsetIndex = 0 to interactionOffsets.Count - 1 do
-                            addInteractionOffset interactionOffsets.[offsetIndex]
-                    elif def.hasInteractionCell then
-                        addInteractionOffset def.interactionCellOffset
+            for def in DefDatabase<ThingDef>.AllDefsListForReading do
+                match def.interactionCellIcon, def.multipleInteractionCellOffsets with
+                | NonNull icon, NonNull interactionOffsets when isSeat icon && interactionOffsets.Count > 0 ->
+                    for offset in interactionOffsets do
+                        addInteractionOffset offset
+                | NonNull icon, _ when isSeat icon && def.hasInteractionCell ->
+                    addInteractionOffset def.interactionCellOffset
+                | _ -> ()
 
             offsets |> Seq.toArray
 
     let private findFacing (map: Map) (placingDef: ThingDef) (placingCell: IntVec3) (currentRotation: Rot4) =
         let mutable allowed = allRotationsMask
+        let mutable preferred = allRotationsMask
         let mutable hasConstraint = false
-        let seen = HashSet<Thing>()
+        let profile = profileFor placingDef
 
         let applyMask mask =
             hasConstraint <- true
             allowed <- allowed &&& mask
 
-        let processThing (thing: Thing) =
-            if seen.Add(thing) then
-                let targetDef = buildableThingDef thing
+        let processChairThing (thing: Thing) =
+            let targetDef = buildableThingDef thing
 
-                if isSeat placingDef then
-                    match tryChairFacing thing targetDef placingCell with
-                    | Some facing -> applyMask (rotationBit facing)
-                    | None -> ()
+            match tryChairFacing thing targetDef placingCell with
+            | Some facing -> applyMask (rotationBit facing)
+            | None -> ()
 
-                match tryFacilityConstraintMask map placingDef placingCell thing targetDef with
-                | Some mask -> applyMask mask
+        let processFacilityThing (thing: Thing) =
+            let targetDef = buildableThingDef thing
+
+            if profile.FacilityTargets.Contains(targetDef) then
+                match
+                    tryFacilityConstraintMask map placingDef placingCell profile.FacilityFacesLinearly thing targetDef
+                with
+                | Some mask ->
+                    applyMask mask
+                    preferred <- preferred &&& preferTargetRotation mask targetDef thing.Rotation
                 | None -> ()
 
-        // Chairs use the sparse interaction/table lookup.
+        // Chair lookup only touches cells that can contain an interaction or
+        // adjacent-seat target. The scratch set is reused between mouse cells.
         if isSeat placingDef then
+            seen.Clear()
+
             let offsets = chairCandidateOffsets.Value
             let mutable offsetIndex = 0
 
@@ -313,95 +516,140 @@ module internal AutoFacing =
 
                 if candidateCell.InBounds(map) then
                     let things = map.thingGrid.ThingsListAtFast(candidateCell)
-
                     let mutable thingIndex = 0
 
                     while allowed <> 0 && thingIndex < things.Count do
-                        processThing things.[thingIndex]
+                        let thing = things.[thingIndex]
+
+                        if seen.Add(thing) then
+                            processChairThing thing
+
                         thingIndex <- thingIndex + 1
 
                 offsetIndex <- offsetIndex + 1
 
-        // Facilities use a bounded ThingGrid search.
-        //
-        // This covers vanilla and modded furniture using
-        // CompFacility / CompAffectedByFacilities without defName
-        // checks or a whole-map Thing scan.
-        let radius = facilitySearchRadius placingDef
+        if allowed <> 0 && profile.FacilityTargets.Count > 0 then
+            match profile.FacilitySearchKind with
+            | FacilitySearchKind.CardinalAdjacent
+            | FacilitySearchKind.EightWayAdjacent ->
+                // Adjacent facilities only need the perimeter of their possible
+                // occupied rectangles. This is O(width + height), and 1x1
+                // furniture touches exactly 4 or 8 cells.
+                collectAdjacentFacilityCandidates map placingDef placingCell profile.FacilitySearchKind seen
 
-        if allowed <> 0 && radius > 0 then
-            let minX = max 0 (placingCell.x - radius)
-            let maxX = min (map.Size.x - 1) (placingCell.x + radius)
-            let minZ = max 0 (placingCell.z - radius)
-            let maxZ = min (map.Size.z - 1) (placingCell.z + radius)
+                let mutable enumerator = seen.GetEnumerator()
 
-            let mutable z = minZ
+                while allowed <> 0 && enumerator.MoveNext() do
+                    processFacilityThing enumerator.Current
 
-            while allowed <> 0 && z <= maxZ do
-                let mutable x = minX
+            | FacilitySearchKind.BoundedOrListed ->
+                let rect = boundedGridRect map placingCell profile.FacilityGridRadius
 
-                while allowed <> 0 && x <= maxX do
-                    let things = map.thingGrid.ThingsListAtFast(IntVec3(x, 0, z))
+                let gridCellCount =
+                    int64 (rect.maxX - rect.minX + 1) * int64 (rect.maxZ - rect.minZ + 1)
 
-                    let mutable thingIndex = 0
+                let listedTargetCount =
+                    listedTargetCountAtMost map profile.FacilityMapDefs gridCellCount
 
-                    while allowed <> 0 && thingIndex < things.Count do
-                        processThing things.[thingIndex]
-                        thingIndex <- thingIndex + 1
+                if AutoFacingLogic.preferListedTargetScan listedTargetCount gridCellCount then
+                    // ListerThings is indexed by ThingDef, so sparse target
+                    // types avoid probing hundreds or thousands of empty cells.
+                    let mutable defIndex = 0
 
-                    x <- x + 1
+                    while allowed <> 0 && defIndex < profile.FacilityMapDefs.Length do
+                        let things = map.listerThings.ThingsOfDef(profile.FacilityMapDefs.[defIndex])
 
-                z <- z + 1
+                        let mutable thingIndex = 0
 
-        if not hasConstraint || allowed = 0 then
-            None
-        elif (allowed &&& rotationBit currentRotation) <> 0 then
-            Some currentRotation
-        else
-            rotations
-            |> Array.tryFind (fun rotation -> (allowed &&& rotationBit rotation) <> 0)
+                        while allowed <> 0 && thingIndex < things.Count do
+                            processFacilityThing things.[thingIndex]
+                            thingIndex <- thingIndex + 1
 
-    let reset (designator: Designator_Build) = (stateFor designator).Reset()
+                        defIndex <- defIndex + 1
+                else
+                    // Dense target types fall back to the bounded ThingGrid, so
+                    // cost stays limited by the facility's configured range.
+                    seen.Clear()
 
-    let tryApply (designator: Designator_Build) =
-        match placingRotField, designator.PlacingDef with
-        | Some placingRot, (:? ThingDef as placingDef) when shouldHandle placingDef ->
+                    let mutable z = rect.minZ
 
-            let map = Find.CurrentMap
+                    while allowed <> 0 && z <= rect.maxZ do
+                        let mutable x = rect.minX
 
-            if not (isNull map) then
-                let cell = UI.MouseCell()
+                        while allowed <> 0 && x <= rect.maxX do
+                            let things = map.thingGrid.ThingsListAtFast(IntVec3(x, 0, z))
 
-                let overArchitectPanel =
-                    ArchitectCategoryTab.InfoRect.Contains(UI.MousePositionOnUIInverted)
+                            let mutable thingIndex = 0
 
-                if not overArchitectPanel && cell.InBounds(map) then
-                    let state = stateFor designator
+                            while allowed <> 0 && thingIndex < things.Count do
+                                let thing = things.[thingIndex]
 
-                    if not (state.IsSame(map, cell)) then
-                        state.Remember(map, cell)
+                                if seen.Add(thing) then
+                                    processFacilityThing thing
 
-                        let currentRotation = placingRot.GetValue(designator) :?> Rot4
+                                thingIndex <- thingIndex + 1
 
-                        match findFacing map placingDef cell currentRotation with
-                        | Some facing when facing <> currentRotation -> placingRot.SetValue(designator, facing)
-                        | _ -> ()
+                            x <- x + 1
+
+                        z <- z + 1
+
+        seen.Clear()
+
+        let watch =
+            if not hasConstraint && isSeat placingDef && SettingsState.faceWatchBuildings () then
+                watchFacingMask map placingCell
+            else
+                0
+
+        AutoFacingLogic.resolveRotation hasConstraint allowed preferred watch currentRotation.AsInt
+        |> Option.map Rot4
+
+    let reset () = lastCell <- IntVec3.Invalid
+
+    let tryApply (designator: Designator_Place) =
+        match Find.CurrentMap, designator.PlacingDef with
+        | null, _ -> ()
+        | map, (:? ThingDef as placingDef) when shouldHandle placingDef ->
+            let cell = UI.MouseCell()
+
+            let overArchitectPanel =
+                ArchitectCategoryTab.InfoRect.Contains(UI.MousePositionOnUIInverted)
+
+            if
+                not overArchitectPanel
+                && cell.InBounds(map)
+                && (cell <> lastCell || map.uniqueID <> lastMapId)
+            then
+                lastMapId <- map.uniqueID
+                lastCell <- cell
+
+                let rotation = &placingRot.Invoke(designator)
+
+                match findFacing map placingDef cell rotation with
+                | Some facing when facing <> rotation -> rotation <- facing
+                | _ -> ()
         | _ -> ()
 
 [<HarmonyPatch(typeof<Designator_Place>, "Selected")>]
 type internal DesignatorPlaceSelectedPatch private () =
     [<HarmonyPostfix>]
-    static member Postfix(__instance: Designator_Place) =
-        match __instance with
-        | :? Designator_Build as designator -> AutoFacing.reset designator
-        | _ -> ()
+    static member Postfix() = AutoFacing.reset ()
 
 [<HarmonyPatch(typeof<Designator_Place>, "SelectedUpdate")>]
 type internal DesignatorPlaceSelectedUpdatePatch private () =
     [<HarmonyPrefix>]
-    static member Prefix(__instance: Designator_Place) =
-        match __instance with
-        | :? Designator_Build as designator -> AutoFacing.tryApply designator
+    static member Prefix(__instance: Designator_Place) = AutoFacing.tryApply __instance
+
+// A click places at the cell under the mouse when the event arrives, which can
+// differ from the cell SelectedUpdate saw earlier in the frame. An install
+// designator loses its PlacingDef with the selected thing, and vanilla only
+// deselects it after this prefix.
+[<HarmonyPatch(typeof<DesignatorManager>, "ProcessInputEvents")>]
+type internal DesignatorManagerProcessInputEventsPatch private () =
+    [<HarmonyPrefix>]
+    static member Prefix(__instance: DesignatorManager) =
+        match __instance.SelectedDesignator with
+        | :? Designator_Place as designator when designator.CanRemainSelected() -> AutoFacing.tryApply designator
         | _ -> ()
 
 [<StaticConstructorOnStartup>]

@@ -3,4 +3,6 @@
   <AutoFacingChairs_SettingsCategory>Auto-Facing Chairs</AutoFacingChairs_SettingsCategory>
   <AutoFacingChairs_ChairsOnly>Chairs only</AutoFacingChairs_ChairsOnly>
   <AutoFacingChairs_ChairsOnlyDesc>Only automatically rotate sittable furniture.</AutoFacingChairs_ChairsOnlyDesc>
+  <AutoFacingChairs_FaceWatchBuildings>Face televisions</AutoFacingChairs_FaceWatchBuildings>
+  <AutoFacingChairs_FaceWatchBuildingsDesc>Seats placed in the watch area of a television or other watchable building face it when no table, workstation, or facility link sets their facing.</AutoFacingChairs_FaceWatchBuildingsDesc>
 </LanguageData>

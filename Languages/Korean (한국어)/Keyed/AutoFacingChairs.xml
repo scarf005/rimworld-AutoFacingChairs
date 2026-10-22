@@ -3,4 +3,6 @@
   <AutoFacingChairs_SettingsCategory>가구 방향 자동 조정</AutoFacingChairs_SettingsCategory>
   <AutoFacingChairs_ChairsOnly>의자만</AutoFacingChairs_ChairsOnly>
   <AutoFacingChairs_ChairsOnlyDesc>앉을 수 있는 가구만 자동으로 회전합니다.</AutoFacingChairs_ChairsOnlyDesc>
+  <AutoFacingChairs_FaceWatchBuildings>텔레비전 바라보기</AutoFacingChairs_FaceWatchBuildings>
+  <AutoFacingChairs_FaceWatchBuildingsDesc>텔레비전 등 시청 건물의 시청 범위에 놓은 의자는 탁자, 작업대, 시설 연결이 방향을 정하지 않을 때 그 건물을 바라봅니다.</AutoFacingChairs_FaceWatchBuildingsDesc>
 </LanguageData>
