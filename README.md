@@ -21,7 +21,7 @@ When you place a sittable chair at a chair-using furniture position, the chair a
 
 - RimWorld 1.6 or 1.7
 - Harmony (`brrainz.harmony`)
-- FSharp.Core (`latta.fsharp.core`) on RimWorld 1.6; [FSharp.Core (1.7)](https://steamcommunity.com/sharedfiles/filedetails/?id=3819630965) (`scarf.fsharp.core`) on RimWorld 1.7
+- [FSharp.Core (1.6, 1.7)](https://steamcommunity.com/sharedfiles/filedetails/?id=3819630965) (`scarf.fsharp.core`); on RimWorld 1.6, FSharp.Core (`latta.fsharp.core`) also works
 
 ## Build
 

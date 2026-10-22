@@ -16,9 +16,12 @@
       <downloadUrl>https://github.com/pardeike/HarmonyRimWorld/releases/latest</downloadUrl>
     </li>
     <li>
-      <packageId>latta.fsharp.core</packageId>
-      <displayName>FSharp.Core</displayName>
-      <steamWorkshopUrl>steam://url/CommunityFilePage/2059725183</steamWorkshopUrl>
+      <packageId>scarf.fsharp.core</packageId>
+      <displayName>FSharp.Core (1.6, 1.7)</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/3819630965</steamWorkshopUrl>
+      <alternativePackageIds>
+        <li>latta.fsharp.core</li>
+      </alternativePackageIds>
     </li>
   </modDependencies>
   <modDependenciesByVersion>
@@ -31,21 +34,16 @@
       </li>
       <li>
         <packageId>scarf.fsharp.core</packageId>
-        <displayName>FSharp.Core (1.7)</displayName>
+        <displayName>FSharp.Core (1.6, 1.7)</displayName>
         <steamWorkshopUrl>steam://url/CommunityFilePage/3819630965</steamWorkshopUrl>
       </li>
     </v1.7>
   </modDependenciesByVersion>
   <loadAfter>
     <li>brrainz.harmony</li>
+    <li>scarf.fsharp.core</li>
     <li>latta.fsharp.core</li>
   </loadAfter>
-  <loadAfterByVersion>
-    <v1.7>
-      <li>brrainz.harmony</li>
-      <li>scarf.fsharp.core</li>
-    </v1.7>
-  </loadAfterByVersion>
   <description>Makes your chair (and other stuff) automatically face furniture when installing so you don't have to spam q/e
 
 warning: entirely vibecoded
